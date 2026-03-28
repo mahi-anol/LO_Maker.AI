@@ -1,0 +1,12 @@
+gradio==4.44.0
+langchain==0.3.7
+langchain-openai==0.2.6
+langchain-community==0.3.7
+langgraph==0.2.38
+faiss-cpu==1.9.0
+pypdf==5.1.0
+reportlab==4.2.5
+python-docx==1.1.2
+tiktoken==0.8.0
+openai==1.54.3
+Pillow
