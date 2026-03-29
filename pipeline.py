@@ -123,19 +123,35 @@ def build_vector_store_from_pdf(pdf_path: str) -> FAISS:
             "একটি text-based PDF আপলোড করুন অথবা 'সরাসরি context লিখুন' অপশন ব্যবহার করুন।"
         )
 
+    # Filter out pages with no meaningful text
+    docs = [d for d in docs if d.page_content and d.page_content.strip()]
+
+    if not docs:
+        raise ValueError(
+            "PDF-এর পৃষ্ঠাগুলোতে পাঠযোগ্য টেক্সট পাওয়া যায়নি। "
+            "'সরাসরি context লিখুন' অপশন ব্যবহার করুন।"
+        )
+
+    # Try splitting with progressively more lenient settings
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=150,
-        separators=["\n\n", "\n", "।", " ", ""],
+        separators=["\n\n", "\n", "।", ".", " ", ""],
     )
     chunks = splitter.split_documents(docs)
 
+    # Fallback 1: larger chunks, minimal separators
     if not chunks:
-        raise ValueError(
-            "PDF প্রসেস করা গেছে কিন্তু কোনো chunk তৈরি হয়নি। "
-            "PDF-এ যথেষ্ট টেক্সট নেই। "
-            "'সরাসরি context লিখুন' অপশন ব্যবহার করুন।"
+        splitter2 = RecursiveCharacterTextSplitter(
+            chunk_size=2000,
+            chunk_overlap=200,
+            separators=[" ", ""],
         )
+        chunks = splitter2.split_documents(docs)
+
+    # Fallback 2: use the raw pages as-is (one "chunk" per page)
+    if not chunks:
+        chunks = docs
 
     embeddings = get_embeddings()
     return FAISS.from_documents(chunks, embeddings)
