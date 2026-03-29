@@ -1,11 +1,6 @@
 """
 Lesson Plan Generator - Streamlit App
 Run with: streamlit run app.py
-
-Changes:
-  - DOCX output only (no PDF)
-  - Download button persists after generation (stored in session_state)
-  - Embedding management: save, load, delete saved book embeddings
 """
 
 import os
@@ -25,7 +20,6 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-  /* Use Streamlit's own theme tokens so text stays readable in dark mode */
   .main-title {
     text-align: center;
     color: var(--text-color);
@@ -46,7 +40,6 @@ st.markdown("""
     padding: 12px 16px;
     border-radius: 4px;
     margin-bottom: 1rem;
-    /* background adapts: light blue in light mode, muted in dark */
     background: color-mix(in srgb, #2E75B6 10%, transparent);
     color: var(--text-color);
   }
@@ -58,8 +51,14 @@ st.markdown("""
     background: color-mix(in srgb, #d97706 10%, transparent);
     color: var(--text-color);
   }
-  /* Primary action button */
-  .stButton > button[kind="primary"],
+  .context-box {
+    border-left: 3px solid #16a34a;
+    padding: 12px 16px;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+    background: color-mix(in srgb, #16a34a 10%, transparent);
+    color: var(--text-color);
+  }
   .stButton > button {
     background-color: #2E75B6;
     color: white;
@@ -79,12 +78,13 @@ st.markdown("""
 
 
 # ── Session state init ────────────────────────────────────────────────────────
-if "docx_bytes" not in st.session_state:
-    st.session_state.docx_bytes = None
-if "docx_filename" not in st.session_state:
-    st.session_state.docx_filename = None
-if "lesson_plan" not in st.session_state:
-    st.session_state.lesson_plan = None
+for key, default in [
+    ("docx_bytes", None),
+    ("docx_filename", None),
+    ("lesson_plan", None),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 
 # ── Font setup ────────────────────────────────────────────────────────────────
@@ -115,7 +115,7 @@ st.markdown("""
 <div class="info-box">
 <b>কীভাবে ব্যবহার করবেন</b><br>
 ১) শিক্ষকের তথ্য ও শিক্ষার ফলাফল লিখুন<br>
-২) পাঠ্যপুস্তক PDF আপলোড করুন <i>অথবা</i> সংরক্ষিত Embedding বেছে নিন<br>
+২) Context পদ্ধতি বেছে নিন: PDF আপলোড, সংরক্ষিত Embedding, বা সরাসরি টেক্সট<br>
 ৩) মডেল বেছে নিন → <b>পাঠ পরিকল্পনা তৈরি করুন</b><br>
 ৪) DOCX ডাউনলোড করুন
 </div>
@@ -155,46 +155,46 @@ learning_outcome = st.text_area(
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Embedding Management Section
+# Context / Embedding Section
 # ══════════════════════════════════════════════════════════════════════════════
-st.subheader("পাঠ্যপুস্তক ও Embedding সেটিংস")
+st.subheader("পাঠ্যপুস্তক ও Context সেটিংস")
 
 st.markdown("""
 <div class="embed-box">
-<b>Embedding সম্পর্কে:</b> পাঠ্যপুস্তক একবার প্রসেস করে সংরক্ষণ করলে পরের বার
-ঐ বই আবার আপলোড না করেও ব্যবহার করা যাবে — সময় ও API খরচ দুটোই বাঁচবে।
+<b>Context কী?</b> AI পাঠ পরিকল্পনা তৈরিতে পাঠ্যপুস্তকের প্রাসঙ্গিক অংশ ব্যবহার করে।
+PDF আপলোড করতে না পারলে সরাসরি টেক্সট লিখেও context দিতে পারবেন।
 </div>
 """, unsafe_allow_html=True)
 
 from embedding_manager import list_aliases, list_saved_books, delete_vectorstore
-
 saved_aliases = list_aliases()
 
-embedding_mode = st.radio(
-    "Embedding পদ্ধতি:",
-    options=[
-        "PDF আপলোড করে নতুনভাবে তৈরি করো",
-        "সংরক্ষিত Embedding লোড করো",
-    ],
+CONTEXT_MODE_PDF     = "PDF আপলোড করো (প্রতিবার index করো)"
+CONTEXT_MODE_SAVED   = "সংরক্ষিত Embedding লোড করো"
+CONTEXT_MODE_MANUAL  = "সরাসরি context লিখুন (PDF ছাড়া)"
+
+context_mode = st.radio(
+    "Context পদ্ধতি:",
+    options=[CONTEXT_MODE_PDF, CONTEXT_MODE_SAVED, CONTEXT_MODE_MANUAL],
     index=0,
-    horizontal=False,
 )
 
-use_saved = "সংরক্ষিত" in embedding_mode
+# Defaults
+use_saved         = False
 saved_alias_choice = ""
-textbook_pdf = None
-save_embedding = False
-new_alias = ""
+textbook_pdf      = None
+save_embedding    = False
+new_alias         = ""
+manual_context    = ""
 
-if use_saved:
+# ── Mode: Saved Embedding ─────────────────────────────────────────────────────
+if context_mode == CONTEXT_MODE_SAVED:
     if not saved_aliases:
         st.warning("কোনো সংরক্ষিত Embedding নেই। প্রথমে PDF আপলোড করে সংরক্ষণ করুন।")
-        use_saved = False
+        context_mode = CONTEXT_MODE_PDF   # fall back gracefully
     else:
-        saved_alias_choice = st.selectbox(
-            "সংরক্ষিত বই:",
-            options=saved_aliases,
-        )
+        use_saved = True
+        saved_alias_choice = st.selectbox("সংরক্ষিত বই:", options=saved_aliases)
         books = {b["alias"]: b for b in list_saved_books()}
         if saved_alias_choice in books:
             meta = books[saved_alias_choice]
@@ -207,11 +207,9 @@ if use_saved:
                 st.success(f"'{del_alias}' মুছে ফেলা হয়েছে।")
                 st.rerun()
 
-else:
-    textbook_pdf = st.file_uploader(
-        "পাঠ্যপুস্তক PDF আপলোড করুন *",
-        type=["pdf"],
-    )
+# ── Mode: PDF Upload ──────────────────────────────────────────────────────────
+if context_mode == CONTEXT_MODE_PDF:
+    textbook_pdf = st.file_uploader("পাঠ্যপুস্তক PDF আপলোড করুন *", type=["pdf"])
     if textbook_pdf:
         st.caption(f"{textbook_pdf.name} ({round(textbook_pdf.size/1024, 1)} KB)")
 
@@ -222,6 +220,20 @@ else:
             placeholder="যেমন: class7_math_2024",
             help="এই নামে Embedding সংরক্ষিত হবে।",
         )
+
+# ── Mode: Manual Context ──────────────────────────────────────────────────────
+if context_mode == CONTEXT_MODE_MANUAL:
+    st.markdown("""
+<div class="context-box">
+<b>সরাসরি context:</b> পাঠ্যপুস্তক থেকে প্রাসঙ্গিক অংশ কপি করে এখানে পেস্ট করুন,
+অথবা নিজের ভাষায় বিষয়বস্তু লিখুন। এই টেক্সট সরাসরি AI-কে দেওয়া হবে — কোনো PDF বা embedding লাগবে না।
+</div>
+""", unsafe_allow_html=True)
+    manual_context = st.text_area(
+        "Context টেক্সট *",
+        placeholder="এখানে পাঠ্যপুস্তকের প্রাসঙ্গিক অংশ বা বিষয়বস্তু লিখুন...",
+        height=200,
+    )
 
 st.divider()
 
@@ -251,17 +263,19 @@ if st.button("পাঠ পরিকল্পনা তৈরি করুন", 
         errors.append("OpenAI API Key দিন।")
     if use_saved and not saved_alias_choice:
         errors.append("একটি সংরক্ষিত Embedding বেছে নিন।")
-    if not use_saved and textbook_pdf is None:
+    if context_mode == CONTEXT_MODE_PDF and textbook_pdf is None:
         errors.append("পাঠ্যপুস্তকের PDF আপলোড করুন।")
-    if not use_saved and save_embedding and not new_alias.strip():
+    if context_mode == CONTEXT_MODE_PDF and save_embedding and not new_alias.strip():
         errors.append("Embedding সংরক্ষণের জন্য বইয়ের নাম (Alias) দিন।")
+    if context_mode == CONTEXT_MODE_MANUAL and not manual_context.strip():
+        errors.append("Context টেক্সট লিখুন।")
 
     for e in errors:
         st.error(e)
 
     if not errors:
         tmp_pdf_path = ""
-        if not use_saved and textbook_pdf is not None:
+        if context_mode == CONTEXT_MODE_PDF and textbook_pdf is not None:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                 tmp.write(textbook_pdf.read())
                 tmp_pdf_path = tmp.name
@@ -269,8 +283,10 @@ if st.button("পাঠ পরিকল্পনা তৈরি করুন", 
         try:
             with st.status("পাঠ পরিকল্পনা তৈরি হচ্ছে...", expanded=True) as status_box:
 
-                if use_saved:
+                if context_mode == CONTEXT_MODE_SAVED:
                     st.write(f"'{saved_alias_choice}' থেকে Embedding লোড হচ্ছে...")
+                elif context_mode == CONTEXT_MODE_MANUAL:
+                    st.write("সরাসরি context ব্যবহার করা হচ্ছে...")
                 else:
                     st.write("পাঠ্যপুস্তক প্রসেস হচ্ছে...")
                     if save_embedding and new_alias.strip():
@@ -291,6 +307,7 @@ if st.button("পাঠ পরিকল্পনা তৈরি করুন", 
                     saved_embedding_alias=saved_alias_choice,
                     save_new_embedding=save_embedding,
                     new_embedding_alias=new_alias.strip(),
+                    manual_context=manual_context.strip(),
                 )
 
                 st.write("DOCX তৈরি হচ্ছে...")
@@ -309,13 +326,13 @@ if st.button("পাঠ পরিকল্পনা তৈরি করুন", 
 
                 status_box.update(label="সম্পন্ন!", state="complete", expanded=False)
 
-            if save_embedding and new_alias.strip() and not use_saved:
+            if context_mode == CONTEXT_MODE_PDF and save_embedding and new_alias.strip():
                 st.success(f"Embedding '{new_alias.strip()}' সফলভাবে সংরক্ষিত হয়েছে।")
 
         except Exception as e:
             logger.exception("Generation error")
             st.error(f"ত্রুটি: {str(e)}")
-            st.info("API Key ও ইন্টারনেট সংযোগ চেক করুন।")
+            st.info("API Key ও ইন্টারনেট সংযোগ চেক করুন। স্ক্যান করা PDF হলে 'সরাসরি context লিখুন' অপশন ব্যবহার করুন।")
         finally:
             if tmp_pdf_path and os.path.exists(tmp_pdf_path):
                 try:
@@ -340,8 +357,33 @@ if st.session_state.docx_bytes is not None:
     )
 
     if st.session_state.lesson_plan:
+        lp = st.session_state.lesson_plan
+
+        # ── Retrieved Context display ─────────────────────────────────────
+        retrieved_ctx = lp.get("retrieved_context", "").strip()
+        if retrieved_ctx:
+            with st.expander("পাঠ্যপুস্তক থেকে যে context ব্যবহার হয়েছে", expanded=False):
+                st.markdown("""
+<div class="context-box">
+নিচের অংশগুলো পাঠ্যপুস্তক থেকে vector similarity search-এর মাধ্যমে বেছে নেওয়া হয়েছে
+এবং AI পাঠ পরিকল্পনা তৈরিতে ব্যবহার করেছে।
+</div>
+""", unsafe_allow_html=True)
+                # Split by the separator used in retrieve_context()
+                chunks = retrieved_ctx.split("\n\n---\n\n")
+                for i, chunk in enumerate(chunks, 1):
+                    st.markdown(f"**অংশ {i}**")
+                    st.text_area(
+                        f"chunk_{i}",
+                        value=chunk.strip(),
+                        height=120,
+                        disabled=True,
+                        label_visibility="collapsed",
+                        key=f"ctx_chunk_{i}",
+                    )
+
+        # ── Lesson plan preview ───────────────────────────────────────────
         with st.expander("পাঠ পরিকল্পনার প্রিভিউ", expanded=False):
-            lp = st.session_state.lesson_plan
             st.markdown(
                 f"**শিক্ষক:** {lp.get('teacher_name')} &nbsp;|&nbsp; "
                 f"**বিষয়:** {lp.get('subject')} &nbsp;|&nbsp; "
@@ -351,15 +393,19 @@ if st.session_state.docx_bytes is not None:
             st.divider()
             sections = [
                 ("শিক্ষার ফলাফল",       "learning_outcome"),
-                ("Lesson Vision",         "lesson_vision"),
+                ("Vision — What",         "vision_what"),
+                ("Vision — Why (Academic)", "vision_why_ac"),
+                ("Vision — Why (Non-Academic)", "vision_why_no"),
                 ("Key Points",            "key_points"),
-                ("মূল্যায়ন",             "assessment"),
-                ("Launch",                "launch"),
-                ("Explore",               "explore"),
-                ("Conceptualize",         "conceptualize"),
-                ("Guided Practice",       "guided_practice"),
-                ("Independent Practice",  "independent_practice"),
-                ("Lesson Closing",        "lesson_closing"),
+                ("Assessment Questions",  "assess_questions"),
+                ("Assessment Exemplar",   "assess_exemplar"),
+                ("Launch — Teacher",      "launch_teacher"),
+                ("Launch — Student",      "launch_student"),
+                ("Explore — Teacher",     "explore_teacher"),
+                ("Conceptualize — Teacher", "concept_teacher"),
+                ("Guided Practice — Teacher", "guided_teacher"),
+                ("Independent Practice — Teacher", "indep_teacher"),
+                ("Lesson Closing — Teacher", "closing_teacher"),
             ]
             for label, key in sections:
                 content = lp.get(key, "")
