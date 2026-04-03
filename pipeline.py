@@ -648,8 +648,14 @@ def node_concept_student(state: LessonPlanState) -> LessonPlanState:
 def node_concept_materials(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
-    prompt = f"""Conceptualize পর্বের উপকরণ তালিকা।
-প্রতিটি আলাদা লাইনে। কোনো নম্বর বা বুলেট নয়।"""
+    prompt = f"""Conceptualize পর্বে শিক্ষক যা করবেন:
+{state["concept_teacher"][:200]}
+
+বিষয়: {state["subject"]} | শ্রেণি: {state["grade"]}
+
+এই কার্যক্রমের জন্য শ্রেণিকক্ষে কী কী শিক্ষা উপকরণ লাগবে?
+শুধুমাত্র বাস্তব উপকরণের নাম লেখো (যেমন: বোর্ড, মার্কার, চার্ট, ওয়ার্কশীট ইত্যাদি)।
+প্রতিটি আলাদা লাইনে। কোনো নম্বর বা বুলেট নয়। কোনো নির্দেশনা বা ব্যাখ্যা লিখবে না।"""
     return {**state, "concept_materials": clean(call_llm(llm, prompt))}
 
 
@@ -695,8 +701,14 @@ def node_guided_student(state: LessonPlanState) -> LessonPlanState:
 def node_guided_materials(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
-    prompt = f"""Guided Practice পর্বের উপকরণ তালিকা।
-প্রতিটি আলাদা লাইনে। কোনো নম্বর বা বুলেট নয়।"""
+    prompt = f"""Guided Practice পর্বে শিক্ষক যা করবেন:
+{state["guided_teacher"][:200]}
+
+বিষয়: {state["subject"]} | শ্রেণি: {state["grade"]}
+
+এই কার্যক্রমের জন্য শ্রেণিকক্ষে কী কী শিক্ষা উপকরণ লাগবে?
+শুধুমাত্র বাস্তব উপকরণের নাম লেখো (যেমন: বোর্ড, মার্কার, অনুশীলনপত্র ইত্যাদি)।
+প্রতিটি আলাদা লাইনে। কোনো নম্বর বা বুলেট নয়। কোনো নির্দেশনা বা ব্যাখ্যা লিখবে না।"""
     return {**state, "guided_materials": clean(call_llm(llm, prompt))}
 
 
@@ -739,8 +751,14 @@ def node_indep_student(state: LessonPlanState) -> LessonPlanState:
 def node_indep_materials(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
-    prompt = f"""Independent Practice পর্বের উপকরণ তালিকা।
-প্রতিটি আলাদা লাইনে। কোনো নম্বর বা বুলেট নয়।"""
+    prompt = f"""Independent Practice পর্বে শিক্ষক যা করবেন:
+{state["indep_teacher"][:200]}
+
+বিষয়: {state["subject"]} | শ্রেণি: {state["grade"]}
+
+এই কার্যক্রমের জন্য শ্রেণিকক্ষে কী কী শিক্ষা উপকরণ লাগবে?
+শুধুমাত্র বাস্তব উপকরণের নাম লেখো (যেমন: অনুশীলনপত্র, খাতা, কলম ইত্যাদি)।
+প্রতিটি আলাদা লাইনে। কোনো নম্বর বা বুলেট নয়। কোনো নির্দেশনা বা ব্যাখ্যা লিখবে না।"""
     return {**state, "indep_materials": clean(call_llm(llm, prompt))}
 
 
@@ -780,8 +798,14 @@ def node_closing_student(state: LessonPlanState) -> LessonPlanState:
 def node_closing_materials(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
-    prompt = f"""Lesson Closing পর্বের উপকরণ তালিকা।
-প্রতিটি আলাদা লাইনে। কোনো নম্বর বা বুলেট নয়।"""
+    prompt = f"""Lesson Closing পর্বে শিক্ষক যা করবেন:
+{state["closing_teacher"][:200]}
+
+বিষয়: {state["subject"]} | শ্রেণি: {state["grade"]}
+
+এই কার্যক্রমের জন্য শ্রেণিকক্ষে কী কী শিক্ষা উপকরণ লাগবে?
+শুধুমাত্র বাস্তব উপকরণের নাম লেখো (যেমন: Exit Ticket কাগজ, বোর্ড, হোমওয়ার্ক শীট ইত্যাদি)।
+প্রতিটি আলাদা লাইনে। কোনো নম্বর বা বুলেট নয়। কোনো নির্দেশনা বা ব্যাখ্যা লিখবে না।"""
     return {**state, "closing_materials": clean(call_llm(llm, prompt))}
 
 
