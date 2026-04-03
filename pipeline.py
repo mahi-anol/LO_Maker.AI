@@ -133,30 +133,92 @@ def get_llm(model_name: str) -> ChatOpenAI:
 
 
 def build_vector_store_from_pdf(pdf_path: str, progress_callback=None) -> FAISS:
-    """Build FAISS vector store from PDF. Falls back to OCR for vector-path PDFs."""
+    """Build FAISS vector store from PDF. Falls back to OCR for vector-path PDFs.
+    
+    Detection logic:
+      - If standard extraction gets 0 pages with text → OCR fallback
+      - If standard extraction gets text but total lines < 60 → likely vector-path
+        PDF with partial/garbage extraction → OCR fallback
+    """
     import logging
     logger = logging.getLogger(__name__)
 
+    def _log(msg):
+        logger.info(msg)
+        if progress_callback:
+            progress_callback(msg)
+
     # ── Step 1: Try standard text extraction ─────────────────────────────
-    if progress_callback:
-        progress_callback("PDF থেকে টেক্সট বের করার চেষ্টা করা হচ্ছে...")
+    _log("📄 PDF থেকে টেক্সট বের করার চেষ্টা করা হচ্ছে (standard extraction)...")
 
     loader = PyPDFLoader(pdf_path)
-    docs = loader.load()
-    docs = [d for d in docs if d.page_content and d.page_content.strip()
+    raw_docs = loader.load()
+
+    _log(f"   PyPDFLoader: {len(raw_docs)} পৃষ্ঠা পড়া হয়েছে")
+
+    # Filter pages with meaningful text (>20 chars)
+    docs = [d for d in raw_docs if d.page_content and d.page_content.strip()
             and len(d.page_content.strip()) > 20]
 
-    # ── Step 2: If no text, try OCR fallback ─────────────────────────────
-    if not docs:
-        logger.info("Standard extraction found no text. Trying OCR fallback...")
-        if progress_callback:
-            progress_callback("সাধারণ পদ্ধতিতে টেক্সট পাওয়া যায়নি। OCR চেষ্টা করা হচ্ছে (এতে সময় লাগতে পারে)...")
+    pages_with_text = len(docs)
+    pages_without_text = len(raw_docs) - pages_with_text
 
+    _log(f"   টেক্সটসহ পৃষ্ঠা: {pages_with_text} | খালি পৃষ্ঠা: {pages_without_text}")
+
+    # Count total lines across all extracted text
+    total_lines = 0
+    total_chars = 0
+    if docs:
+        for d in docs:
+            text = d.page_content.strip()
+            total_lines += len([l for l in text.split("\n") if l.strip()])
+            total_chars += len(text)
+
+    _log(f"   মোট লাইন: {total_lines} | মোট অক্ষর: {total_chars}")
+
+    # ── Step 2: Decide if OCR fallback is needed ─────────────────────────
+    needs_ocr = False
+
+    if pages_with_text == 0:
+        _log("⚠️ কোনো পৃষ্ঠায় টেক্সট পাওয়া যায়নি — OCR fallback প্রয়োজন")
+        needs_ocr = True
+    elif total_lines < 60:
+        _log(
+            f"⚠️ মাত্র {total_lines} লাইন পাওয়া গেছে {pages_with_text} পৃষ্ঠায় — "
+            f"সম্ভবত vector-based PDF। OCR fallback চেষ্টা করা হচ্ছে..."
+        )
+        needs_ocr = True
+    elif pages_without_text > pages_with_text:
+        _log(
+            f"⚠️ বেশিরভাগ পৃষ্ঠা খালি ({pages_without_text}/{len(raw_docs)}) — "
+            f"আংশিক vector-based PDF হতে পারে। OCR fallback চেষ্টা করা হচ্ছে..."
+        )
+        needs_ocr = True
+    else:
+        _log(f"✅ Standard extraction সফল — {pages_with_text} পৃষ্ঠা, {total_lines} লাইন")
+
+    if needs_ocr:
+        _log("🔍 OCR (Tesseract) দিয়ে টেক্সট বের করা হচ্ছে (এতে সময় লাগতে পারে)...")
         try:
-            docs = _ocr_extract_pdf(pdf_path, progress_callback)
+            ocr_docs = _ocr_extract_pdf(pdf_path, progress_callback)
+            if ocr_docs:
+                ocr_lines = sum(
+                    len([l for l in d.page_content.split("\n") if l.strip()])
+                    for d in ocr_docs
+                )
+                _log(f"   OCR: {len(ocr_docs)} পৃষ্ঠা, {ocr_lines} লাইন পাওয়া গেছে")
+
+                # Use OCR results if they're better than standard extraction
+                if ocr_lines > total_lines:
+                    _log(f"   OCR ফলাফল ভালো ({ocr_lines} > {total_lines} লাইন) — OCR ব্যবহার করা হচ্ছে")
+                    docs = ocr_docs
+                else:
+                    _log(f"   OCR ফলাফল ভালো নয় ({ocr_lines} <= {total_lines}) — standard extraction রাখা হচ্ছে")
+            else:
+                _log("   OCR থেকেও কোনো টেক্সট পাওয়া যায়নি")
         except Exception as e:
             logger.warning(f"OCR extraction failed: {e}")
-            docs = []
+            _log(f"   OCR ব্যর্থ: {str(e)[:100]}")
 
     if not docs:
         raise ValueError(
@@ -164,11 +226,8 @@ def build_vector_store_from_pdf(pdf_path: str, progress_callback=None) -> FAISS:
             "'সরাসরি context লিখুন' অপশন ব্যবহার করুন।"
         )
 
-    logger.info(f"Extracted {len(docs)} text chunks from PDF")
-
     # ── Step 3: Split into chunks ────────────────────────────────────────
-    if progress_callback:
-        progress_callback(f"{len(docs)} পৃষ্ঠা থেকে টেক্সট পাওয়া গেছে। Embedding তৈরি হচ্ছে...")
+    _log(f"✂️ টেক্সট chunk-এ ভাগ করা হচ্ছে...")
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
@@ -176,18 +235,36 @@ def build_vector_store_from_pdf(pdf_path: str, progress_callback=None) -> FAISS:
         separators=["\n\n", "\n", "।", ".", " ", ""],
     )
     chunks = splitter.split_documents(docs)
+    _log(f"   প্রাথমিক chunking: {len(chunks)} chunks (size=1000, overlap=150)")
 
     if not chunks:
         splitter2 = RecursiveCharacterTextSplitter(
             chunk_size=2000, chunk_overlap=200, separators=[" ", ""],
         )
         chunks = splitter2.split_documents(docs)
+        _log(f"   Fallback chunking: {len(chunks)} chunks (size=2000, overlap=200)")
 
     if not chunks:
         chunks = docs
+        _log(f"   Raw pages as chunks: {len(chunks)}")
+
+    # Log chunk size stats
+    chunk_sizes = [len(c.page_content) for c in chunks]
+    avg_size = sum(chunk_sizes) / len(chunk_sizes) if chunk_sizes else 0
+    min_size = min(chunk_sizes) if chunk_sizes else 0
+    max_size = max(chunk_sizes) if chunk_sizes else 0
+    _log(f"   Chunk stats: মোট={len(chunks)}, গড়={avg_size:.0f} অক্ষর, "
+         f"সর্বনিম্ন={min_size}, সর্বোচ্চ={max_size}")
+
+    # ── Step 4: Create embeddings ────────────────────────────────────────
+    _log(f"🧠 {len(chunks)} chunks-এর Embedding তৈরি হচ্ছে (OpenAI API)...")
 
     embeddings = get_embeddings()
-    return FAISS.from_documents(chunks, embeddings)
+    vectorstore = FAISS.from_documents(chunks, embeddings)
+
+    _log(f"✅ FAISS vector store তৈরি সম্পন্ন — {vectorstore.index.ntotal} vectors")
+
+    return vectorstore
 
 
 def _ocr_extract_pdf(pdf_path: str, progress_callback=None) -> list:
