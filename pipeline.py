@@ -426,12 +426,13 @@ def node_assess_questions(state: LessonPlanState) -> LessonPlanState:
     prompt = f"""শিক্ষার্থীর শিক্ষার ফলাফল: {state["learning_outcome"]}
 {_ctx(state)}
 
-ঠিক দুটি প্রশ্ন লেখো। অন্য কিছু লিখবে না — কোনো শিরোনাম নয়, কোনো ব্যাখ্যা নয়।
+ঠিক দুটি প্রশ্ন লেখো। প্রশ্নগুলো অবশ্যই "{state["learning_outcome"]}" এর সাথে সরাসরি সম্পর্কিত হতে হবে।
+অন্য কিছু লিখবে না — কোনো শিরোনাম নয়, কোনো ব্যাখ্যা নয়।
 
 প্রশ্ন ১) একটি বহুনির্বাচনি প্রশ্ন (২ মার্ক) — বাস্তব জীবনের প্রেক্ষাপটে।
 ক) ... খ) ... গ) ... ঘ) ...
 
-প্রশ্ন ২) একটি গণনামূলক প্রশ্ন (৪ মার্ক) — সরাসরি গণিত লেখো।"""
+প্রশ্ন ২) একটি গণনামূলক প্রশ্ন (৪ মার্ক)।"""
     return {**state, "assess_questions": clean(call_llm(llm, prompt))}
 
 
@@ -446,7 +447,6 @@ def node_assess_exemplar(state: LessonPlanState) -> LessonPlanState:
 নিয়ম:
 - শুধু উত্তর লেখো, প্রশ্ন পুনরায় লিখবে না।
 - প্রতিটি উত্তর নম্বর দিয়ে শুরু করো: ১) উত্তর: ...
-- গণিত সরাসরি লেখো: 3(x+2) = 3x+6
 - ধাপে ধাপে সমাধান দেখাও।"""
     return {**state, "assess_exemplar": clean(call_llm(llm, prompt))}
 
@@ -479,8 +479,7 @@ def node_vision_what(state: LessonPlanState) -> LessonPlanState:
     prompt = f"""শিক্ষার্থীর শিক্ষার ফলাফল: {state["learning_outcome"]}
 {_ctx(state)}
 
-শুধু ২-৩ বাক্য লেখো: এই টপিকের মূল ধারণা কী? সংক্ষিপ্ত সংজ্ঞা ও উদাহরণসহ।
-গণিতের উদাহরণ সরাসরি লেখো: যেমন 3(x+2) = 3x+6
+শুধু ২-৩ বাক্য লেখো: "{state["learning_outcome"]}" এই টপিকের মূল ধারণা কী? সংক্ষিপ্ত সংজ্ঞা ও উদাহরণসহ।
 কোনো শিরোনাম বা লেবেল লিখবে না।"""
     return {**state, "vision_what": clean(call_llm(llm, prompt))}
 
@@ -576,14 +575,17 @@ def node_explore_teacher(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
     prompt = f"""শিক্ষার্থীর শিক্ষার ফলাফল: {state["learning_outcome"]}
+বিষয়: {state["subject"]} | শ্রেণি: {state["grade"]}
 {_ctx(state)}
 
 Explore পর্বে (৭-১০ মিনিট) শিক্ষকের কাজ লেখো।
+গুরুত্বপূর্ণ: সমস্যা ও উদাহরণ অবশ্যই "{state["learning_outcome"]}" এর সাথে সরাসরি সম্পর্কিত হতে হবে।
+
 প্রতিটি উপ-বিভাগ নিচের ঠিক এই শিরোনামে (একা একটি লাইনে):
 
 Teacher Action
-শিক্ষার্থীদের সামনে একটি বাস্তবধর্মী সমস্যা বা পরিস্থিতি উপস্থাপন করো।
-শিক্ষক বোর্ডে কী লিখবেন বা করবেন — ২-৩ বাক্য। সরাসরি গণিত লেখো: 3(x+2)
+শিক্ষার্থীদের সামনে Learning Outcome সম্পর্কিত একটি বাস্তবধর্মী সমস্যা বা পরিস্থিতি উপস্থাপন করো।
+শিক্ষক বোর্ডে কী লিখবেন বা করবেন — ২-৩ বাক্য।
 
 গুরুত্বপূর্ণ: শিরোনামগুলো হুবহু উপরের ইংরেজিতে লিখবে। কোনো ** বা # নয়।"""
     return {**state, "explore_teacher": clean(call_llm(llm, prompt))}
@@ -603,9 +605,14 @@ def node_explore_student(state: LessonPlanState) -> LessonPlanState:
 def node_explore_materials(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
-    prompt = f"""Explore পর্বের জন্য প্রয়োজনীয় উপকরণের তালিকা।
-প্রতিটি আলাদা লাইনে। কোনো নম্বর বা বুলেট নয়।
-কার্যক্রম: {state["explore_teacher"][:100]}"""
+    prompt = f"""Explore পর্বে শিক্ষক যা করবেন:
+{state["explore_teacher"][:200]}
+
+বিষয়: {state["subject"]} | শ্রেণি: {state["grade"]}
+
+এই কার্যক্রমের জন্য শ্রেণিকক্ষে কী কী শিক্ষা উপকরণ লাগবে?
+শুধুমাত্র বাস্তব উপকরণের নাম লেখো (যেমন: বোর্ড, মার্কার, ফ্লিপচার্ট ইত্যাদি)।
+প্রতিটি আলাদা লাইনে। কোনো নম্বর বা বুলেট নয়। কোনো নির্দেশনা, প্রশ্ন বা ব্যাখ্যা লিখবে না।"""
     return {**state, "explore_materials": clean(call_llm(llm, prompt))}
 
 
@@ -615,20 +622,23 @@ def node_concept_teacher(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
     prompt = f"""শিক্ষার্থীর শিক্ষার ফলাফল: {state["learning_outcome"]}
+বিষয়: {state["subject"]} | শ্রেণি: {state["grade"]}
 {_ctx(state)}
 How ধাপগুলো: {state["key_points"]}
 
 Conceptualize পর্বে (৮ মিনিট) শিক্ষকের কাজ লেখো।
+গুরুত্বপূর্ণ: সবকিছু অবশ্যই "{state["learning_outcome"]}" এই Learning Outcome এর সাথে সম্পর্কিত হতে হবে। অন্য কোনো বিষয়ের উদাহরণ ব্যবহার করো না।
+
 প্রতিটি উপ-বিভাগ নিচের ঠিক এই শিরোনামে (একা একটি লাইনে):
 
 Suggested Time: 8 minutes (Abstracting the Steps + Generalization)
 (এই লাইনটি হুবহু লিখবে)
 
 Teacher Action
-শিক্ষক বোর্ডে কী লিখবেন বা করবেন — ধাপে ধাপে। সরাসরি গণিত লেখো: 2(x+3) = 2x+6
+শিক্ষক বোর্ডে কী লিখবেন বা করবেন — ধাপে ধাপে। Learning Outcome অনুযায়ী সুনির্দিষ্ট উদাহরণ দাও।
 
 Pictorial / Representation / Demonstration
-শিক্ষক বোর্ডে উদাহরণ দেন। ধাপে ধাপে সম্পূর্ণ সমাধান দেখাও।
+শিক্ষক বোর্ডে Learning Outcome সম্পর্কিত উদাহরণ দেন। ধাপে ধাপে সম্পূর্ণ সমাধান দেখাও।
 
 গুরুত্বপূর্ণ: শিরোনামগুলো হুবহু উপরের ইংরেজিতে লিখবে। কোনো ** বা # নয়।"""
     return {**state, "concept_teacher": clean(call_llm(llm, prompt))}
@@ -665,20 +675,23 @@ def node_guided_teacher(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
     prompt = f"""শিক্ষার্থীর শিক্ষার ফলাফল: {state["learning_outcome"]}
+বিষয়: {state["subject"]} | শ্রেণি: {state["grade"]}
 {_ctx(state)}
 How ধাপগুলো: {state["key_points"]}
 
 Guided Practice পর্বে (১০ মিনিট) শিক্ষকের কাজ লেখো।
+গুরুত্বপূর্ণ: সমস্যাগুলো অবশ্যই "{state["learning_outcome"]}" এর সাথে সরাসরি সম্পর্কিত হতে হবে।
+
 প্রতিটি উপ-বিভাগ নিচের ঠিক এই শিরোনামে (একা একটি লাইনে):
 
 Teacher Action
 শিক্ষক কীভাবে এই অনুশীলন পরিচালনা করবেন — ২-৩ বাক্য।
 
 Problem 1:
-একটি অনুশীলন সমস্যা। সরাসরি গণিত লেখো।
+Learning Outcome সম্পর্কিত একটি অনুশীলন সমস্যা।
 
 Problem 2:
-আরেকটি সমস্যা (বাস্তব প্রেক্ষাপটে)।
+Learning Outcome সম্পর্কিত আরেকটি সমস্যা (বাস্তব প্রেক্ষাপটে)।
 
 Teacher Feedback
 শিক্ষার্থীদের উত্তরে কীভাবে feedback দেবেন — ২-৩ উদাহরণ।
@@ -718,20 +731,22 @@ def node_indep_teacher(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
     prompt = f"""শিক্ষার্থীর শিক্ষার ফলাফল: {state["learning_outcome"]}
+বিষয়: {state["subject"]} | শ্রেণি: {state["grade"]}
 Guided Practice সমস্যা: {state["guided_teacher"][:300]}
 
 Independent Practice পর্বে (৮ মিনিট) শিক্ষকের কাজ লেখো।
-(Guided Practice এর চেয়ে সামান্য কঠিন সমস্যা দিতে হবে)
+গুরুত্বপূর্ণ: সমস্যাগুলো অবশ্যই "{state["learning_outcome"]}" এর সাথে সম্পর্কিত হতে হবে এবং Guided Practice এর চেয়ে সামান্য কঠিন হতে হবে।
+
 প্রতিটি উপ-বিভাগ নিচের ঠিক এই শিরোনামে (একা একটি লাইনে):
 
 Teacher Action
 শিক্ষক কীভাবে একা কাজের নির্দেশনা দেবেন — ২-৩ বাক্য।
 
 Task 1:
-একটি স্বতন্ত্র অনুশীলন সমস্যা। সরাসরি গণিত লেখো।
+Learning Outcome সম্পর্কিত একটি স্বতন্ত্র অনুশীলন সমস্যা।
 
 Task 2:
-আরেকটি সমস্যা (একটু বেশি কঠিন)।
+Learning Outcome সম্পর্কিত আরেকটি সমস্যা (একটু বেশি কঠিন)।
 
 গুরুত্বপূর্ণ: শিরোনামগুলো হুবহু উপরের ইংরেজিতে লিখবে। কোনো ** বা # নয়।"""
     return {**state, "indep_teacher": clean(call_llm(llm, prompt))}
