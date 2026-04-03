@@ -152,6 +152,18 @@ learning_outcome = st.text_area(
     height=90,
 )
 
+st.subheader("মূল্যায়ন প্রশ্ন (ঐচ্ছিক)")
+st.markdown("""
+<div class="context-box">
+<b>ঐচ্ছিক:</b> নিজের মূল্যায়ন প্রশ্ন দিতে চাইলে এখানে লিখুন। না দিলে AI নিজে তৈরি করবে।
+</div>
+""", unsafe_allow_html=True)
+user_assess_questions = st.text_area(
+    "Assessment Questions (ঐচ্ছিক)",
+    placeholder="যেমন:\nপ্রশ্ন ১) 3(x+2) এর মান কত?\nক) 3x+2  খ) 3x+6  গ) 3x+8  ঘ) 6x+2\n\nপ্রশ্ন ২) সরল করো: 5(2a+3) - 2(a+4)",
+    height=120,
+)
+
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -308,6 +320,7 @@ if st.button("পাঠ পরিকল্পনা তৈরি করুন", 
                     save_new_embedding=save_embedding,
                     new_embedding_alias=new_alias.strip(),
                     manual_context=manual_context.strip(),
+                    user_assess_questions=user_assess_questions.strip(),
                 )
 
                 st.write("DOCX তৈরি হচ্ছে...")
@@ -424,3 +437,106 @@ if st.session_state.docx_bytes is not None:
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.divider()
 st.caption("GPT-4o: ~$0.05–0.15 প্রতি পাঠ পরিকল্পনা · gpt-4o-mini: ~10x সস্তা")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Sidebar: Guidelines Management
+# ══════════════════════════════════════════════════════════════════════════════
+from guidelines_manager import (
+    list_guidelines, toggle_guideline, add_guideline,
+    delete_guideline, reset_to_defaults, get_active_guidelines,
+)
+
+with st.sidebar:
+    st.markdown("## 📋 শিক্ষণ নির্দেশিকা")
+    st.caption("AI এই নির্দেশিকাগুলো মেনে পাঠ পরিকল্পনা তৈরি করে।")
+
+    all_guidelines = list_guidelines()
+    active_count = sum(1 for g in all_guidelines if g.get("active", True))
+    st.markdown(f"**সক্রিয়:** {active_count}/{len(all_guidelines)}")
+
+    # ── View & Toggle existing guidelines ──────────────────────────────────
+    st.markdown("---")
+    st.markdown("### বর্তমান নির্দেশিকা")
+
+    # Group by category
+    categories = {}
+    for g in all_guidelines:
+        cat = g.get("category", "General")
+        if cat not in categories:
+            categories[cat] = []
+        categories[cat].append(g)
+
+    for cat_name, cat_guidelines in categories.items():
+        with st.expander(f"📂 {cat_name} ({len(cat_guidelines)})", expanded=False):
+            for g in cat_guidelines:
+                gid = g["id"]
+                is_active = g.get("active", True)
+                is_builtin = g.get("builtin", True)
+
+                col_toggle, col_del = st.columns([4, 1])
+                with col_toggle:
+                    new_val = st.checkbox(
+                        f"{'🟢' if is_active else '🔴'} {g['name']}",
+                        value=is_active,
+                        key=f"toggle_{gid}",
+                        help=f"Source: {g.get('source', 'Unknown')}",
+                    )
+                    if new_val != is_active:
+                        toggle_guideline(gid, new_val)
+                        st.rerun()
+                with col_del:
+                    if not is_builtin:
+                        if st.button("🗑️", key=f"del_{gid}", help="মুছে ফেলুন"):
+                            delete_guideline(gid)
+                            st.rerun()
+
+                # Show content in a nested expander
+                with st.expander(f"বিস্তারিত দেখুন", expanded=False):
+                    st.caption(f"**Source:** {g.get('source', 'Unknown')}")
+                    st.text(g.get("content", ""))
+
+    # ── Add new guideline ─────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### নতুন নির্দেশিকা যোগ করুন")
+
+    with st.form("add_guideline_form", clear_on_submit=True):
+        new_name = st.text_input("নির্দেশিকার নাম *", placeholder="যেমন: Think-Pair-Share")
+        new_category = st.selectbox(
+            "Category",
+            options=[
+                "General Pedagogy", "Lesson Vision", "Assessment",
+                "Launch", "Explore", "Conceptualize",
+                "Guided Practice", "Independent Practice", "Closing",
+                "Classroom Management", "Literacy", "Other",
+            ],
+            index=0,
+        )
+        new_content = st.text_area(
+            "নির্দেশিকার বিষয়বস্তু *",
+            placeholder="AI এই নির্দেশনা মেনে পাঠ পরিকল্পনা তৈরি করবে...",
+            height=150,
+        )
+        new_source = st.text_input("Source (ঐচ্ছিক)", value="User", placeholder="যেমন: TLAC Book")
+
+        submitted = st.form_submit_button("যোগ করুন", use_container_width=True)
+        if submitted:
+            if not new_name.strip() or not new_content.strip():
+                st.error("নাম ও বিষয়বস্তু দিতে হবে।")
+            else:
+                add_guideline(
+                    name=new_name.strip(),
+                    content=new_content.strip(),
+                    category=new_category,
+                    source=new_source.strip() or "User",
+                )
+                st.success(f"'{new_name.strip()}' যোগ হয়েছে!")
+                st.rerun()
+
+    # ── Reset to defaults ─────────────────────────────────────────────────
+    st.markdown("---")
+    if st.button("ডিফল্ট নির্দেশিকায় ফিরে যান", key="reset_guidelines",
+                 help="সব user-added নির্দেশিকা মুছে যাবে"):
+        reset_to_defaults()
+        st.success("ডিফল্টে ফিরে গেছে।")
+        st.rerun()
