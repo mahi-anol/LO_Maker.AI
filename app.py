@@ -226,81 +226,101 @@ if context_mode == CONTEXT_MODE_SAVED:
 if context_mode == CONTEXT_MODE_PDF:
     textbook_pdf = st.file_uploader("পাঠ্যপুস্তক PDF আপলোড করুন *", type=["pdf"])
 
-    save_embedding = st.checkbox("এই বইয়ের Embedding সংরক্ষণ করো (পরে পুনরায় ব্যবহারের জন্য)")
-    if save_embedding:
-        new_alias = st.text_input(
-            "বইয়ের নাম / Alias *",
-            placeholder="যেমন: class7_math_2024",
-            help="এই নামে Embedding সংরক্ষিত হবে।",
-        )
-
-    # Process PDF immediately when uploaded
     if textbook_pdf is not None:
         uploaded_name = textbook_pdf.name
-        st.caption(f"{uploaded_name} ({round(textbook_pdf.size/1024, 1)} KB)")
+        st.caption(f"📄 {uploaded_name} ({round(textbook_pdf.size/1024, 1)} KB)")
 
-        # Only process if it's a new file (not already processed)
+        # Reset state if a different file is uploaded
         if st.session_state.pdf_processed_name != uploaded_name:
             st.session_state.pdf_vectorstore_ready = False
             st.session_state.pdf_processing_error = None
             st.session_state.pdf_processed_name = None
 
-            with st.status("PDF প্রসেস হচ্ছে ও Embedding তৈরি হচ্ছে...", expanded=True) as pdf_status:
-                try:
-                    # Save uploaded PDF to temp
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                        tmp.write(textbook_pdf.read())
-                        tmp_pdf_path_for_embed = tmp.name
+        # Show current status
+        if st.session_state.pdf_vectorstore_ready:
+            st.success(f"✅ Embedding প্রস্তুত আছে ({uploaded_name})")
 
-                    def _progress(msg):
-                        st.write(msg)
+            # Option to save the embedding permanently
+            with st.expander("💾 এই Embedding সংরক্ষণ করুন (ঐচ্ছিক)", expanded=False):
+                save_alias = st.text_input(
+                    "বইয়ের নাম / Alias *",
+                    placeholder="যেমন: class8_math_2026",
+                    help="এই নামে Embedding সংরক্ষিত হবে। পরে 'সংরক্ষিত Embedding' থেকে লোড করতে পারবেন।",
+                    key="save_alias_input",
+                )
+                if st.button("💾 সংরক্ষণ করুন", key="save_embed_btn"):
+                    if not save_alias.strip():
+                        st.error("বইয়ের নাম দিন।")
+                    else:
+                        try:
+                            from pipeline import get_embeddings
+                            from embedding_manager import load_vectorstore, save_vectorstore as _save_vs
+                            embeddings = get_embeddings()
+                            vs = load_vectorstore("__current_upload__", embeddings)
+                            _save_vs(vs, save_alias.strip(), uploaded_name)
+                            st.success(f"✅ '{save_alias.strip()}' নামে সংরক্ষিত হয়েছে!")
+                        except Exception as e:
+                            st.error(f"সংরক্ষণ ব্যর্থ: {str(e)}")
 
-                    from pipeline import build_vector_store_from_pdf, get_embeddings
-                    from embedding_manager import save_vectorstore as _save_vs
+        elif st.session_state.pdf_processing_error:
+            st.error(f"❌ প্রসেসিং ব্যর্থ: {st.session_state.pdf_processing_error}")
+            st.info("আবার চেষ্টা করুন অথবা 'সরাসরি context লিখুন' ব্যবহার করুন।")
 
-                    vectorstore = build_vector_store_from_pdf(
-                        tmp_pdf_path_for_embed,
-                        progress_callback=_progress,
-                    )
+        # Generate Embedding button — only show if not yet processed
+        if not st.session_state.pdf_vectorstore_ready:
+            st.markdown("""
+<div class="embed-box">
+📌 PDF আপলোড হয়েছে। এখন <b>Embedding তৈরি করুন</b> বোতামে ক্লিক করুন।
+বড় PDF বা স্ক্যান করা PDF-এ সময় বেশি লাগতে পারে (OCR ব্যবহার হবে)।
+</div>
+""", unsafe_allow_html=True)
 
-                    # Always save to a temp alias so pipeline can load it
-                    _temp_alias = "__current_upload__"
-                    _save_vs(vectorstore, _temp_alias, uploaded_name)
-
-                    # If user wants a permanent save too
-                    if save_embedding and new_alias.strip():
-                        _save_vs(vectorstore, new_alias.strip(), uploaded_name)
-                        st.write(f"Embedding '{new_alias.strip()}' নামে সংরক্ষিত হয়েছে।")
-
-                    st.session_state.pdf_vectorstore_ready = True
-                    st.session_state.pdf_processed_name = uploaded_name
-                    doc_count = vectorstore.index.ntotal
-                    pdf_status.update(
-                        label=f"✅ PDF প্রসেস সম্পন্ন — {doc_count} টি text chunk পাওয়া গেছে",
-                        state="complete", expanded=False,
-                    )
-
-                except Exception as e:
-                    logger.exception("PDF processing error")
-                    st.session_state.pdf_processing_error = str(e)
-                    pdf_status.update(label="❌ PDF প্রসেস ব্যর্থ", state="error", expanded=True)
-                    st.error(f"PDF প্রসেসিং ত্রুটি: {str(e)}")
-                    st.info("'সরাসরি context লিখুন' অপশন ব্যবহার করুন, অথবা অন্য PDF চেষ্টা করুন।")
-                finally:
+            if st.button("⚡ Embedding তৈরি করুন", key="gen_embed_btn", use_container_width=True):
+                with st.status("PDF প্রসেস হচ্ছে ও Embedding তৈরি হচ্ছে...", expanded=True) as pdf_status:
                     try:
-                        os.unlink(tmp_pdf_path_for_embed)
-                    except Exception:
-                        pass
-                    # Reset file pointer for potential re-read
-                    textbook_pdf.seek(0)
-        else:
-            # Already processed this file
-            if st.session_state.pdf_vectorstore_ready:
-                st.success(f"✅ '{uploaded_name}' এর Embedding প্রস্তুত আছে।")
-            elif st.session_state.pdf_processing_error:
-                st.error(f"❌ পূর্বে প্রসেসিং ব্যর্থ হয়েছে: {st.session_state.pdf_processing_error}")
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                            tmp.write(textbook_pdf.read())
+                            tmp_pdf_path_for_embed = tmp.name
+
+                        def _progress(msg):
+                            st.write(msg)
+
+                        from pipeline import build_vector_store_from_pdf
+                        from embedding_manager import save_vectorstore as _save_vs
+
+                        vectorstore = build_vector_store_from_pdf(
+                            tmp_pdf_path_for_embed,
+                            progress_callback=_progress,
+                        )
+
+                        # Save to temp alias for pipeline to use
+                        _save_vs(vectorstore, "__current_upload__", uploaded_name)
+
+                        st.session_state.pdf_vectorstore_ready = True
+                        st.session_state.pdf_processed_name = uploaded_name
+                        st.session_state.pdf_processing_error = None
+                        doc_count = vectorstore.index.ntotal
+                        pdf_status.update(
+                            label=f"✅ সম্পন্ন — {doc_count} টি text chunk পাওয়া গেছে",
+                            state="complete", expanded=False,
+                        )
+                        st.rerun()
+
+                    except Exception as e:
+                        logger.exception("PDF processing error")
+                        st.session_state.pdf_processing_error = str(e)
+                        st.session_state.pdf_vectorstore_ready = False
+                        pdf_status.update(label="❌ ব্যর্থ", state="error", expanded=True)
+                        st.error(f"ত্রুটি: {str(e)}")
+                    finally:
+                        try:
+                            os.unlink(tmp_pdf_path_for_embed)
+                        except Exception:
+                            pass
+                        textbook_pdf.seek(0)
+
     else:
-        # File removed / not uploaded yet — reset state
+        # No file uploaded — reset
         if st.session_state.pdf_processed_name is not None:
             st.session_state.pdf_vectorstore_ready = False
             st.session_state.pdf_processed_name = None
