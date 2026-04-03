@@ -82,6 +82,9 @@ for key, default in [
     ("docx_bytes", None),
     ("docx_filename", None),
     ("lesson_plan", None),
+    ("pdf_vectorstore_ready", False),
+    ("pdf_processed_name", None),
+    ("pdf_processing_error", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -222,8 +225,6 @@ if context_mode == CONTEXT_MODE_SAVED:
 # ── Mode: PDF Upload ──────────────────────────────────────────────────────────
 if context_mode == CONTEXT_MODE_PDF:
     textbook_pdf = st.file_uploader("পাঠ্যপুস্তক PDF আপলোড করুন *", type=["pdf"])
-    if textbook_pdf:
-        st.caption(f"{textbook_pdf.name} ({round(textbook_pdf.size/1024, 1)} KB)")
 
     save_embedding = st.checkbox("এই বইয়ের Embedding সংরক্ষণ করো (পরে পুনরায় ব্যবহারের জন্য)")
     if save_embedding:
@@ -232,6 +233,78 @@ if context_mode == CONTEXT_MODE_PDF:
             placeholder="যেমন: class7_math_2024",
             help="এই নামে Embedding সংরক্ষিত হবে।",
         )
+
+    # Process PDF immediately when uploaded
+    if textbook_pdf is not None:
+        uploaded_name = textbook_pdf.name
+        st.caption(f"{uploaded_name} ({round(textbook_pdf.size/1024, 1)} KB)")
+
+        # Only process if it's a new file (not already processed)
+        if st.session_state.pdf_processed_name != uploaded_name:
+            st.session_state.pdf_vectorstore_ready = False
+            st.session_state.pdf_processing_error = None
+            st.session_state.pdf_processed_name = None
+
+            with st.status("PDF প্রসেস হচ্ছে ও Embedding তৈরি হচ্ছে...", expanded=True) as pdf_status:
+                try:
+                    # Save uploaded PDF to temp
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                        tmp.write(textbook_pdf.read())
+                        tmp_pdf_path_for_embed = tmp.name
+
+                    def _progress(msg):
+                        st.write(msg)
+
+                    from pipeline import build_vector_store_from_pdf, get_embeddings
+                    from embedding_manager import save_vectorstore as _save_vs
+
+                    vectorstore = build_vector_store_from_pdf(
+                        tmp_pdf_path_for_embed,
+                        progress_callback=_progress,
+                    )
+
+                    # Always save to a temp alias so pipeline can load it
+                    _temp_alias = "__current_upload__"
+                    _save_vs(vectorstore, _temp_alias, uploaded_name)
+
+                    # If user wants a permanent save too
+                    if save_embedding and new_alias.strip():
+                        _save_vs(vectorstore, new_alias.strip(), uploaded_name)
+                        st.write(f"Embedding '{new_alias.strip()}' নামে সংরক্ষিত হয়েছে।")
+
+                    st.session_state.pdf_vectorstore_ready = True
+                    st.session_state.pdf_processed_name = uploaded_name
+                    doc_count = vectorstore.index.ntotal
+                    pdf_status.update(
+                        label=f"✅ PDF প্রসেস সম্পন্ন — {doc_count} টি text chunk পাওয়া গেছে",
+                        state="complete", expanded=False,
+                    )
+
+                except Exception as e:
+                    logger.exception("PDF processing error")
+                    st.session_state.pdf_processing_error = str(e)
+                    pdf_status.update(label="❌ PDF প্রসেস ব্যর্থ", state="error", expanded=True)
+                    st.error(f"PDF প্রসেসিং ত্রুটি: {str(e)}")
+                    st.info("'সরাসরি context লিখুন' অপশন ব্যবহার করুন, অথবা অন্য PDF চেষ্টা করুন।")
+                finally:
+                    try:
+                        os.unlink(tmp_pdf_path_for_embed)
+                    except Exception:
+                        pass
+                    # Reset file pointer for potential re-read
+                    textbook_pdf.seek(0)
+        else:
+            # Already processed this file
+            if st.session_state.pdf_vectorstore_ready:
+                st.success(f"✅ '{uploaded_name}' এর Embedding প্রস্তুত আছে।")
+            elif st.session_state.pdf_processing_error:
+                st.error(f"❌ পূর্বে প্রসেসিং ব্যর্থ হয়েছে: {st.session_state.pdf_processing_error}")
+    else:
+        # File removed / not uploaded yet — reset state
+        if st.session_state.pdf_processed_name is not None:
+            st.session_state.pdf_vectorstore_ready = False
+            st.session_state.pdf_processed_name = None
+            st.session_state.pdf_processing_error = None
 
 # ── Mode: Manual Context ──────────────────────────────────────────────────────
 if context_mode == CONTEXT_MODE_MANUAL:
@@ -416,10 +489,8 @@ if st.button("পাঠ পরিকল্পনা তৈরি করুন", 
         errors.append("OpenAI API Key দিন।")
     if use_saved and not saved_alias_choice:
         errors.append("একটি সংরক্ষিত Embedding বেছে নিন।")
-    if context_mode == CONTEXT_MODE_PDF and textbook_pdf is None:
-        errors.append("পাঠ্যপুস্তকের PDF আপলোড করুন।")
-    if context_mode == CONTEXT_MODE_PDF and save_embedding and not new_alias.strip():
-        errors.append("Embedding সংরক্ষণের জন্য বইয়ের নাম (Alias) দিন।")
+    if context_mode == CONTEXT_MODE_PDF and not st.session_state.pdf_vectorstore_ready:
+        errors.append("পাঠ্যপুস্তকের PDF আপলোড করুন ও প্রসেস সম্পন্ন হওয়া পর্যন্ত অপেক্ষা করুন।")
     if context_mode == CONTEXT_MODE_MANUAL and not manual_context.strip():
         errors.append("Context টেক্সট লিখুন।")
 
@@ -427,12 +498,6 @@ if st.button("পাঠ পরিকল্পনা তৈরি করুন", 
         st.error(e)
 
     if not errors:
-        tmp_pdf_path = ""
-        if context_mode == CONTEXT_MODE_PDF and textbook_pdf is not None:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                tmp.write(textbook_pdf.read())
-                tmp_pdf_path = tmp.name
-
         try:
             with st.status("পাঠ পরিকল্পনা তৈরি হচ্ছে...", expanded=True) as status_box:
 
@@ -441,11 +506,21 @@ if st.button("পাঠ পরিকল্পনা তৈরি করুন", 
                 elif context_mode == CONTEXT_MODE_MANUAL:
                     st.write("সরাসরি context ব্যবহার করা হচ্ছে...")
                 else:
-                    st.write("পাঠ্যপুস্তক প্রসেস হচ্ছে...")
-                    if save_embedding and new_alias.strip():
-                        st.write(f"Embedding '{new_alias.strip()}' নামে সংরক্ষিত হবে...")
+                    st.write("আগে থেকে প্রসেস করা Embedding ব্যবহার করা হচ্ছে...")
 
                 st.write("AI পাঠ পরিকল্পনার সকল অংশ তৈরি করছে (১–২ মিনিট)...")
+
+                # Determine embedding source
+                if context_mode == CONTEXT_MODE_PDF:
+                    # Use the pre-built embedding from upload step
+                    _use_saved = True
+                    _saved_alias = "__current_upload__"
+                elif context_mode == CONTEXT_MODE_SAVED:
+                    _use_saved = True
+                    _saved_alias = saved_alias_choice
+                else:
+                    _use_saved = False
+                    _saved_alias = ""
 
                 from pipeline import run_pipeline
                 lesson_plan = run_pipeline(
@@ -454,12 +529,12 @@ if st.button("পাঠ পরিকল্পনা তৈরি করুন", 
                     grade=grade.strip(),
                     duration=duration.strip(),
                     learning_outcome=learning_outcome.strip(),
-                    textbook_pdf_path=tmp_pdf_path,
+                    textbook_pdf_path="",
                     model_name=model_name,
-                    use_saved_embedding=use_saved,
-                    saved_embedding_alias=saved_alias_choice,
-                    save_new_embedding=save_embedding,
-                    new_embedding_alias=new_alias.strip(),
+                    use_saved_embedding=_use_saved,
+                    saved_embedding_alias=_saved_alias,
+                    save_new_embedding=False,
+                    new_embedding_alias="",
                     manual_context=manual_context.strip(),
                     user_assess_questions=user_assess_questions.strip(),
                 )
@@ -480,19 +555,10 @@ if st.button("পাঠ পরিকল্পনা তৈরি করুন", 
 
                 status_box.update(label="সম্পন্ন!", state="complete", expanded=False)
 
-            if context_mode == CONTEXT_MODE_PDF and save_embedding and new_alias.strip():
-                st.success(f"Embedding '{new_alias.strip()}' সফলভাবে সংরক্ষিত হয়েছে।")
-
         except Exception as e:
             logger.exception("Generation error")
             st.error(f"ত্রুটি: {str(e)}")
-            st.info("API Key ও ইন্টারনেট সংযোগ চেক করুন। স্ক্যান করা PDF হলে 'সরাসরি context লিখুন' অপশন ব্যবহার করুন।")
-        finally:
-            if tmp_pdf_path and os.path.exists(tmp_pdf_path):
-                try:
-                    os.unlink(tmp_pdf_path)
-                except Exception:
-                    pass
+            st.info("API Key ও ইন্টারনেট সংযোগ চেক করুন। সমস্যা হলে 'সরাসরি context লিখুন' অপশন ব্যবহার করুন।")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Download Section (persistent)

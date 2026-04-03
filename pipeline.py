@@ -125,27 +125,44 @@ def get_llm(model_name: str) -> ChatOpenAI:
     )
 
 
-def build_vector_store_from_pdf(pdf_path: str) -> FAISS:
+def build_vector_store_from_pdf(pdf_path: str, progress_callback=None) -> FAISS:
+    """Build FAISS vector store from PDF. Falls back to OCR for vector-path PDFs."""
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # ── Step 1: Try standard text extraction ─────────────────────────────
+    if progress_callback:
+        progress_callback("PDF থেকে টেক্সট বের করার চেষ্টা করা হচ্ছে...")
+
     loader = PyPDFLoader(pdf_path)
     docs = loader.load()
+    docs = [d for d in docs if d.page_content and d.page_content.strip()
+            and len(d.page_content.strip()) > 20]
+
+    # ── Step 2: If no text, try OCR fallback ─────────────────────────────
+    if not docs:
+        logger.info("Standard extraction found no text. Trying OCR fallback...")
+        if progress_callback:
+            progress_callback("সাধারণ পদ্ধতিতে টেক্সট পাওয়া যায়নি। OCR চেষ্টা করা হচ্ছে (এতে সময় লাগতে পারে)...")
+
+        try:
+            docs = _ocr_extract_pdf(pdf_path, progress_callback)
+        except Exception as e:
+            logger.warning(f"OCR extraction failed: {e}")
+            docs = []
 
     if not docs:
         raise ValueError(
-            "PDF থেকে কোনো টেক্সট পাওয়া যায়নি। "
-            "PDF-টি স্ক্যান করা বা image-based হতে পারে। "
-            "একটি text-based PDF আপলোড করুন অথবা 'সরাসরি context লিখুন' অপশন ব্যবহার করুন।"
-        )
-
-    # Filter out pages with no meaningful text
-    docs = [d for d in docs if d.page_content and d.page_content.strip()]
-
-    if not docs:
-        raise ValueError(
-            "PDF-এর পৃষ্ঠাগুলোতে পাঠযোগ্য টেক্সট পাওয়া যায়নি। "
+            "PDF থেকে কোনো টেক্সট বের করা যায়নি (সাধারণ ও OCR উভয় পদ্ধতিতে)। "
             "'সরাসরি context লিখুন' অপশন ব্যবহার করুন।"
         )
 
-    # Try splitting with progressively more lenient settings
+    logger.info(f"Extracted {len(docs)} text chunks from PDF")
+
+    # ── Step 3: Split into chunks ────────────────────────────────────────
+    if progress_callback:
+        progress_callback(f"{len(docs)} পৃষ্ঠা থেকে টেক্সট পাওয়া গেছে। Embedding তৈরি হচ্ছে...")
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=150,
@@ -153,21 +170,85 @@ def build_vector_store_from_pdf(pdf_path: str) -> FAISS:
     )
     chunks = splitter.split_documents(docs)
 
-    # Fallback 1: larger chunks, minimal separators
     if not chunks:
         splitter2 = RecursiveCharacterTextSplitter(
-            chunk_size=2000,
-            chunk_overlap=200,
-            separators=[" ", ""],
+            chunk_size=2000, chunk_overlap=200, separators=[" ", ""],
         )
         chunks = splitter2.split_documents(docs)
 
-    # Fallback 2: use the raw pages as-is (one "chunk" per page)
     if not chunks:
         chunks = docs
 
     embeddings = get_embeddings()
     return FAISS.from_documents(chunks, embeddings)
+
+
+def _ocr_extract_pdf(pdf_path: str, progress_callback=None) -> list:
+    """Extract text from PDF using OCR (for scanned/vector-path PDFs)."""
+    from langchain.schema import Document as LCDocument
+
+    try:
+        from pdf2image import convert_from_path
+        import pytesseract
+    except ImportError:
+        raise ImportError(
+            "OCR dependencies not available. "
+            "Install: pip install pdf2image pytesseract"
+        )
+
+    # Determine available languages
+    try:
+        available_langs = pytesseract.get_languages()
+    except Exception:
+        available_langs = ["eng"]
+
+    lang = "ben+eng" if "ben" in available_langs else "eng"
+
+    # Convert PDF pages to images in batches to manage memory
+    from pypdf import PdfReader
+    reader = PdfReader(pdf_path)
+    total_pages = len(reader.pages)
+
+    docs = []
+    batch_size = 10
+
+    for start in range(0, total_pages, batch_size):
+        end = min(start + batch_size, total_pages)
+        if progress_callback:
+            progress_callback(f"OCR: পৃষ্ঠা {start+1}-{end}/{total_pages} প্রসেস হচ্ছে...")
+
+        try:
+            images = convert_from_path(
+                pdf_path,
+                first_page=start + 1,
+                last_page=end,
+                dpi=200,
+                fmt="jpeg",
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"pdf2image failed for pages {start+1}-{end}: {e}")
+            continue
+
+        for i, img in enumerate(images):
+            page_num = start + i + 1
+            try:
+                text = pytesseract.image_to_string(img, lang=lang)
+                text = text.strip()
+                if text and len(text) > 30:
+                    docs.append(LCDocument(
+                        page_content=text,
+                        metadata={"source": pdf_path, "page": page_num - 1},
+                    ))
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"OCR failed on page {page_num}: {e}")
+            finally:
+                del img  # free memory
+
+        del images
+
+    return docs
 
 
 def retrieve_context(vectorstore: FAISS, learning_outcome: str, k: int = 6) -> str:
