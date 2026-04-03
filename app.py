@@ -517,11 +517,11 @@ st.subheader("ধাপ ১: Context বের করুন ও পর্যা�
 if context_mode != CONTEXT_MODE_MANUAL:
     ctx_col1, ctx_col2 = st.columns(2)
     with ctx_col1:
-        retrieval_k = st.slider(
+        retrieval_k = st.number_input(
             "কতগুলো context chunk আনবে",
-            min_value=1, max_value=20, value=6,
-            help="বেশি আনলে বেশি তথ্য পাবেন, তবে অপ্রাসঙ্গিক context আসার সম্ভাবনাও বাড়ে।",
-            key="retrieval_k_slider",
+            min_value=1, value=6, step=1,
+            help="যতগুলো চান লিখুন। Vector store-এ এর চেয়ে কম থাকলে যতগুলো আছে ততগুলোই আনবে।",
+            key="retrieval_k_input",
         )
     with ctx_col2:
         use_entire_book = st.checkbox(
