@@ -346,6 +346,27 @@ def clean(text: str) -> str:
     return text.strip()
 
 
+def _ctx(state: dict, lo_key: str = "learning_outcome") -> str:
+    """Build context block for prompts with strict relevance instructions.
+    
+    Instead of dumping raw context, this wraps it with explicit instructions
+    to only use parts relevant to the learning outcome.
+    """
+    context = state.get("context", "").strip()
+    lo = state.get(lo_key, "").strip()
+    if not context:
+        return ""
+    return (
+        f"নিচে পাঠ্যপুস্তক থেকে কিছু অংশ দেওয়া হলো। এর মধ্যে কিছু অংশ Learning Outcome "
+        f"'{lo}' এর সাথে প্রাসঙ্গিক নাও হতে পারে।\n"
+        f"সতর্কতা: শুধুমাত্র '{lo}' বিষয়ের সাথে সরাসরি সম্পর্কিত অংশ ব্যবহার করো। "
+        f"অন্য অধ্যায়ের সূত্র, উদাহরণ, বা সমস্যা ব্যবহার করো না। "
+        f"যদি নিচের কোনো অংশই প্রাসঙ্গিক না হয়, তাহলে context উপেক্ষা করে "
+        f"তোমার নিজের জ্ঞান থেকে '{lo}' বিষয়ে উত্তর দাও।\n\n"
+        f"পাঠ্যপুস্তকের অংশসমূহ:\n{context}"
+    )
+
+
 # ── Node: RAG context ──────────────────────────────────────────────────────────
 
 def node_retrieve_context(state: LessonPlanState) -> LessonPlanState:
@@ -403,7 +424,7 @@ def node_assess_questions(state: LessonPlanState) -> LessonPlanState:
 
     llm = get_llm(state["model_name"])
     prompt = f"""শিক্ষার্থীর শিক্ষার ফলাফল: {state["learning_outcome"]}
-পাঠ্যপুস্তক প্রসঙ্গ: {state["context"]}
+{_ctx(state)}
 
 ঠিক দুটি প্রশ্ন লেখো। অন্য কিছু লিখবে না — কোনো শিরোনাম নয়, কোনো ব্যাখ্যা নয়।
 
@@ -456,7 +477,7 @@ def node_vision_what(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
     prompt = f"""শিক্ষার্থীর শিক্ষার ফলাফল: {state["learning_outcome"]}
-পাঠ্যপুস্তক প্রসঙ্গ: {state["context"]}
+{_ctx(state)}
 
 শুধু ২-৩ বাক্য লেখো: এই টপিকের মূল ধারণা কী? সংক্ষিপ্ত সংজ্ঞা ও উদাহরণসহ।
 গণিতের উদাহরণ সরাসরি লেখো: যেমন 3(x+2) = 3x+6
@@ -555,7 +576,7 @@ def node_explore_teacher(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
     prompt = f"""শিক্ষার্থীর শিক্ষার ফলাফল: {state["learning_outcome"]}
-পাঠ্যপুস্তক প্রসঙ্গ: {state["context"]}
+{_ctx(state)}
 
 Explore পর্বে (৭-১০ মিনিট) শিক্ষকের কাজ লেখো।
 প্রতিটি উপ-বিভাগ নিচের ঠিক এই শিরোনামে (একা একটি লাইনে):
@@ -594,7 +615,7 @@ def node_concept_teacher(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
     prompt = f"""শিক্ষার্থীর শিক্ষার ফলাফল: {state["learning_outcome"]}
-পাঠ্যপুস্তক প্রসঙ্গ: {state["context"]}
+{_ctx(state)}
 How ধাপগুলো: {state["key_points"]}
 
 Conceptualize পর্বে (৮ মিনিট) শিক্ষকের কাজ লেখো।
@@ -638,7 +659,7 @@ def node_guided_teacher(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
     prompt = f"""শিক্ষার্থীর শিক্ষার ফলাফল: {state["learning_outcome"]}
-পাঠ্যপুস্তক প্রসঙ্গ: {state["context"]}
+{_ctx(state)}
 How ধাপগুলো: {state["key_points"]}
 
 Guided Practice পর্বে (১০ মিনিট) শিক্ষকের কাজ লেখো।

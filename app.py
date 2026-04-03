@@ -612,19 +612,16 @@ if st.session_state.retrieved_chunks is not None:
 
         # Optional similarity threshold filter
         if has_scores:
-            threshold = st.slider(
+            threshold = st.number_input(
                 "Similarity threshold (ঐচ্ছিক — বেশি score = কম প্রাসঙ্গিক)",
-                min_value=0.0, max_value=3.0, value=3.0, step=0.1,
-                help="এর নিচে score থাকলে context রাখা হবে। 3.0 = কোনো ফিল্টার নেই।",
+                min_value=0.0, value=0.0, step=0.1, format="%.1f",
+                help="0 = কোনো ফিল্টার নেই (সব রাখো)। যেমন 1.0 দিলে 1.0 এর বেশি score-এর chunk সরিয়ে দেবে।",
                 key="sim_threshold",
             )
-            if threshold < 3.0:
+            if threshold > 0:
                 for c in chunks:
                     if c["score"] > threshold:
                         c["active"] = False
-                    else:
-                        # Only reactivate if it was deactivated by threshold, not manually
-                        pass
     else:
         st.warning("কোনো context পাওয়া যায়নি। নিজে context যোগ করতে পারেন।")
 
