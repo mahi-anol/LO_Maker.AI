@@ -130,14 +130,23 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── API Key input ─────────────────────────────────────────────────────────────
-if not get_api_key():
+current_key = get_api_key()
+if not current_key:
     st.warning("OPENAI_API_KEY পাওয়া যাচ্ছে না।")
     api_key_input = st.text_input("OpenAI API Key", type="password", placeholder="sk-...")
     if api_key_input:
         os.environ["OPENAI_API_KEY"] = api_key_input.strip()
         st.success("API Key সেট হয়েছে।")
+        st.rerun()
 else:
-    st.success("OpenAI API Key লোড হয়েছে।")
+    masked = current_key[:7] + "..." + current_key[-4:] if len(current_key) > 12 else "***"
+    col_key_info, col_key_action = st.columns([3, 1])
+    with col_key_info:
+        st.success(f"API Key সেট আছে: `{masked}`")
+    with col_key_action:
+        if st.button("🔄 পরিবর্তন", key="change_api_key"):
+            os.environ.pop("OPENAI_API_KEY", None)
+            st.rerun()
 
 st.divider()
 
@@ -504,6 +513,27 @@ st.divider()
 # ══════════════════════════════════════════════════════════════════════════════
 st.subheader("ধাপ ১: Context বের করুন ও পর্যালোচনা করুন")
 
+# ── Retrieval controls ────────────────────────────────────────────────────
+if context_mode != CONTEXT_MODE_MANUAL:
+    ctx_col1, ctx_col2 = st.columns(2)
+    with ctx_col1:
+        retrieval_k = st.slider(
+            "কতগুলো context chunk আনবে",
+            min_value=1, max_value=20, value=6,
+            help="বেশি আনলে বেশি তথ্য পাবেন, তবে অপ্রাসঙ্গিক context আসার সম্ভাবনাও বাড়ে।",
+            key="retrieval_k_slider",
+        )
+    with ctx_col2:
+        use_entire_book = st.checkbox(
+            "📚 সম্পূর্ণ বই context হিসেবে ব্যবহার করো",
+            value=False,
+            help="সব chunk একসাথে context হিসেবে পাঠাবে। বড় বইয়ের জন্য ধীর ও ব্যয়বহুল হতে পারে।",
+            key="use_entire_book_cb",
+        )
+else:
+    retrieval_k = 6
+    use_entire_book = False
+
 if st.button("🔍 Context বের করুন", key="retrieve_ctx_btn", use_container_width=True):
 
     errors = []
@@ -524,29 +554,40 @@ if st.button("🔍 Context বের করুন", key="retrieve_ctx_btn", use_
         try:
             with st.spinner("Context বের করা হচ্ছে..."):
                 if context_mode == CONTEXT_MODE_MANUAL:
-                    # Manual context — no retrieval needed
-                    st.session_state.retrieved_chunks = [manual_context.strip()]
+                    # Manual — store as single chunk with score 0
+                    st.session_state.retrieved_chunks = [
+                        {"text": manual_context.strip(), "score": 0.0, "active": True}
+                    ]
                 else:
-                    # Retrieve from vector store
                     if context_mode == CONTEXT_MODE_PDF:
                         _alias = "__current_upload__"
                     else:
                         _alias = saved_alias_choice
 
-                    from pipeline import get_embeddings, retrieve_context
+                    from pipeline import get_embeddings, retrieve_context_with_scores, get_all_chunks_as_context
                     from embedding_manager import load_vectorstore
 
                     embeddings = get_embeddings()
                     vectorstore = load_vectorstore(_alias, embeddings)
-                    context_text = retrieve_context(vectorstore, learning_outcome.strip())
 
-                    if context_text:
-                        chunks = [c.strip() for c in context_text.split("\n\n---\n\n") if c.strip()]
-                        st.session_state.retrieved_chunks = chunks
+                    if use_entire_book:
+                        full_text = get_all_chunks_as_context(vectorstore)
+                        if full_text:
+                            parts = [p.strip() for p in full_text.split("\n\n---\n\n") if p.strip()]
+                            st.session_state.retrieved_chunks = [
+                                {"text": t, "score": 0.0, "active": True} for t in parts
+                            ]
+                        else:
+                            st.session_state.retrieved_chunks = []
                     else:
-                        st.session_state.retrieved_chunks = []
+                        scored = retrieve_context_with_scores(
+                            vectorstore, learning_outcome.strip(), k=retrieval_k
+                        )
+                        st.session_state.retrieved_chunks = [
+                            {"text": text, "score": score, "active": True}
+                            for text, score in scored
+                        ]
 
-                st.session_state.context_ready_for_gen = False
                 st.session_state.extra_contexts = []
                 st.rerun()
 
@@ -557,50 +598,96 @@ if st.button("🔍 Context বের করুন", key="retrieve_ctx_btn", use_
 # ── Show retrieved context for review ─────────────────────────────────────
 if st.session_state.retrieved_chunks is not None:
     chunks = st.session_state.retrieved_chunks
+    active_chunks = [c for c in chunks if c.get("active", True)]
 
     if chunks:
+        has_scores = any(c["score"] > 0 for c in chunks)
         st.markdown(f"""
 <div class="context-box">
-<b>পাঠ্যপুস্তক থেকে {len(chunks)} টি context পাওয়া গেছে।</b><br>
-পর্যালোচনা করুন — অপ্রাসঙ্গিক অংশ মুছতে পারবেন, নতুন context যোগ করতে পারবেন।
-সন্তুষ্ট হলে নিচের <b>"পাঠ পরিকল্পনা তৈরি করুন"</b> বোতামে ক্লিক করুন।
+<b>{len(active_chunks)}/{len(chunks)} টি context সক্রিয়।</b>
+অপ্রাসঙ্গিক অংশ ❌ বোতামে সরান, নতুন context যোগ করুন।
+সন্তুষ্ট হলে নিচে <b>"পাঠ পরিকল্পনা তৈরি করুন"</b> ক্লিক করুন।
 </div>
 """, unsafe_allow_html=True)
+
+        # Optional similarity threshold filter
+        if has_scores:
+            threshold = st.slider(
+                "Similarity threshold (ঐচ্ছিক — বেশি score = কম প্রাসঙ্গিক)",
+                min_value=0.0, max_value=3.0, value=3.0, step=0.1,
+                help="এর নিচে score থাকলে context রাখা হবে। 3.0 = কোনো ফিল্টার নেই।",
+                key="sim_threshold",
+            )
+            if threshold < 3.0:
+                for c in chunks:
+                    if c["score"] > threshold:
+                        c["active"] = False
+                    else:
+                        # Only reactivate if it was deactivated by threshold, not manually
+                        pass
     else:
-        st.warning("কোনো প্রাসঙ্গিক context পাওয়া যায়নি। নিজে context যোগ করতে পারেন, অথবা AI নিজের জ্ঞান ব্যবহার করবে।")
+        st.warning("কোনো context পাওয়া যায়নি। নিজে context যোগ করতে পারেন।")
 
-    # Editable context chunks
-    edited_chunks = []
+    # Display each chunk with score badge and remove button
     for i, chunk in enumerate(chunks):
-        st.markdown(f"**অংশ {i+1}**")
-        edited = st.text_area(
-            f"context_chunk_{i}",
-            value=chunk,
-            height=120,
-            key=f"ctx_edit_{i}",
-            label_visibility="collapsed",
-        )
-        edited_chunks.append(edited)
+        is_active = chunk.get("active", True)
+        score = chunk.get("score", 0)
+        text = chunk.get("text", "")
 
-    # Show previously added extra contexts
+        if is_active:
+            col_label, col_remove = st.columns([5, 1])
+            with col_label:
+                score_badge = f" · Score: `{score:.3f}`" if score > 0 else ""
+                st.markdown(f"**অংশ {i+1}**{score_badge}")
+            with col_remove:
+                if st.button("❌", key=f"remove_ctx_{i}", help="এই context সরান"):
+                    st.session_state.retrieved_chunks[i]["active"] = False
+                    st.rerun()
+
+            st.text_area(
+                f"ctx_{i}",
+                value=text,
+                height=110,
+                key=f"ctx_edit_{i}",
+                label_visibility="collapsed",
+            )
+        else:
+            # Show as removed — option to restore
+            col_label2, col_restore = st.columns([5, 1])
+            with col_label2:
+                st.markdown(f"~~অংশ {i+1}~~ (সরানো হয়েছে) · Score: `{score:.3f}`")
+            with col_restore:
+                if st.button("♻️", key=f"restore_ctx_{i}", help="পুনরুদ্ধার করুন"):
+                    st.session_state.retrieved_chunks[i]["active"] = True
+                    st.rerun()
+
+    # ── Extra contexts section ────────────────────────────────────────────
     extra_list = st.session_state.extra_contexts
+    if extra_list:
+        st.markdown("---")
+        st.markdown("**অতিরিক্ত context সমূহ**")
     for j, extra in enumerate(extra_list):
-        st.markdown(f"**অতিরিক্ত context {j+1}**")
-        edited_extra = st.text_area(
-            f"extra_ctx_{j}",
+        col_ex_label, col_ex_del = st.columns([5, 1])
+        with col_ex_label:
+            st.markdown(f"**অতিরিক্ত {j+1}**")
+        with col_ex_del:
+            if st.button("❌", key=f"del_extra_{j}", help="সরান"):
+                st.session_state.extra_contexts.pop(j)
+                st.rerun()
+        st.text_area(
+            f"extra_{j}",
             value=extra,
-            height=120,
+            height=110,
             key=f"extra_edit_{j}",
             label_visibility="collapsed",
         )
-        extra_list[j] = edited_extra
 
-    # Add new extra context
+    # ── Add new context ───────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("**➕ নতুন context যোগ করুন**")
     new_extra_ctx = st.text_area(
-        "নতুন context লিখুন",
-        placeholder="পাঠ্যপুস্তক থেকে কপি করে পেস্ট করুন, অথবা নিজের ভাষায় লিখুন...",
+        "নতুন context",
+        placeholder="পাঠ্যপুস্তক থেকে কপি-পেস্ট করুন বা নিজে লিখুন...",
         height=120,
         key="new_extra_ctx_input",
         label_visibility="collapsed",
@@ -632,7 +719,6 @@ if st.session_state.retrieved_chunks is not None:
 
     if st.button("📝 পাঠ পরিকল্পনা তৈরি করুন", use_container_width=True, key="gen_lp_btn"):
 
-        # Re-check errors
         final_errors = []
         if not teacher_name.strip():     final_errors.append("শিক্ষকের নাম দিন।")
         if not subject.strip():          final_errors.append("বিষয় দিন।")
@@ -646,13 +732,13 @@ if st.session_state.retrieved_chunks is not None:
             st.error(e)
 
         if not final_errors:
-            # Build final context from edited chunks + extras
+            # Build final context from active chunks + edited extras
             all_context_parts = []
             for i, chunk in enumerate(chunks):
-                # Read the edited value from the text_area widget
-                edited_val = st.session_state.get(f"ctx_edit_{i}", chunk).strip()
-                if edited_val:
-                    all_context_parts.append(edited_val)
+                if chunk.get("active", True):
+                    edited_val = st.session_state.get(f"ctx_edit_{i}", chunk["text"]).strip()
+                    if edited_val:
+                        all_context_parts.append(edited_val)
             for j, extra in enumerate(st.session_state.extra_contexts):
                 edited_val = st.session_state.get(f"extra_edit_{j}", extra).strip()
                 if edited_val:

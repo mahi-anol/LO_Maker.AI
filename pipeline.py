@@ -258,14 +258,13 @@ def _ocr_extract_pdf(pdf_path: str, progress_callback=None) -> list:
     return docs
 
 
-def retrieve_context(vectorstore: FAISS, learning_outcome: str, k: int = 8) -> str:
-    """Retrieve relevant context with score-based filtering.
-    
-    Uses similarity_search_with_score to filter out low-relevance chunks.
-    FAISS L2 distance: lower = more similar. Typical thresholds:
-      < 0.5  = very relevant
-      0.5-1.0 = somewhat relevant  
-      > 1.0  = likely irrelevant
+def retrieve_context_with_scores(
+    vectorstore: FAISS, learning_outcome: str, k: int = 6
+) -> list[tuple]:
+    """Retrieve context chunks with their similarity scores.
+
+    Returns list of (text, score) tuples sorted by score (lower = more similar).
+    No filtering is done here — the UI handles that.
     """
     import logging
     logger = logging.getLogger(__name__)
@@ -273,51 +272,55 @@ def retrieve_context(vectorstore: FAISS, learning_outcome: str, k: int = 8) -> s
     try:
         total_docs = vectorstore.index.ntotal
         if total_docs == 0:
-            return ""
+            return []
         safe_k = min(k, total_docs)
 
-        # Get results WITH scores for filtering
         results_with_scores = vectorstore.similarity_search_with_score(
             learning_outcome, k=safe_k
         )
 
         if not results_with_scores:
-            return ""
+            return []
 
-        # Log all scores for debugging
+        out = []
         for doc, score in results_with_scores:
             preview = doc.page_content[:80].replace("\n", " ")
             logger.info(f"  Retrieval score={score:.3f} : {preview}...")
+            out.append((doc.page_content, round(float(score), 3)))
 
-        # Filter by relevance score threshold
-        # FAISS L2 distance: lower = better match
-        RELEVANCE_THRESHOLD = 1.2  # reject chunks with distance > this
-        relevant = [(doc, score) for doc, score in results_with_scores
-                     if score < RELEVANCE_THRESHOLD]
-
-        if not relevant:
-            logger.warning(
-                f"No chunks passed relevance threshold ({RELEVANCE_THRESHOLD}). "
-                f"Best score was {results_with_scores[0][1]:.3f}. "
-                f"Using top 2 results as fallback."
-            )
-            # Fallback: take the top 2 even if scores are poor
-            relevant = results_with_scores[:2]
-
-        # Take only the best matches (max 4 after filtering)
-        relevant = relevant[:4]
-
-        logger.info(
-            f"Retrieval: {len(relevant)}/{len(results_with_scores)} chunks passed "
-            f"(threshold={RELEVANCE_THRESHOLD}, best={results_with_scores[0][1]:.3f})"
-        )
-
-        return "\n\n---\n\n".join(doc.page_content for doc, score in relevant)
+        return out
 
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning(f"retrieve_context error: {e}")
+        return []
+
+
+def get_all_chunks_as_context(vectorstore: FAISS) -> str:
+    """Return ALL chunks from the vector store concatenated as context.
+    Used when the user wants to use the entire book."""
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        total = vectorstore.index.ntotal
+        if total == 0:
+            return ""
+        # Retrieve all using a dummy query with k=total
+        results = vectorstore.similarity_search("", k=total)
+        logger.info(f"Full-book context: {len(results)} chunks, {total} vectors")
+        return "\n\n---\n\n".join(doc.page_content for doc in results)
+    except Exception as e:
+        logger.warning(f"get_all_chunks error: {e}")
         return ""
+
+
+def retrieve_context(vectorstore: FAISS, learning_outcome: str, k: int = 6) -> str:
+    """Legacy wrapper — returns filtered context as a single string."""
+    results = retrieve_context_with_scores(vectorstore, learning_outcome, k=k)
+    if not results:
+        return ""
+    return "\n\n---\n\n".join(text for text, score in results)
 
 
 def call_llm(llm: ChatOpenAI, prompt: str) -> str:
