@@ -85,6 +85,11 @@ for key, default in [
     ("pdf_vectorstore_ready", False),
     ("pdf_processed_name", None),
     ("pdf_processing_error", None),
+    # Context review step
+    ("retrieved_chunks", None),       # list of retrieved context strings
+    ("context_ready_for_gen", False),  # True after user reviews context
+    ("final_context", ""),             # final context after user review/edit
+    ("extra_contexts", []),            # user-added extra context strings
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -495,22 +500,20 @@ with tab_add:
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Generate Button
+# STEP 1: Retrieve Context
 # ══════════════════════════════════════════════════════════════════════════════
-if st.button("পাঠ পরিকল্পনা তৈরি করুন", use_container_width=True):
+st.subheader("ধাপ ১: Context বের করুন ও পর্যালোচনা করুন")
+
+if st.button("🔍 Context বের করুন", key="retrieve_ctx_btn", use_container_width=True):
 
     errors = []
-    if not teacher_name.strip():     errors.append("শিক্ষকের নাম দিন।")
-    if not subject.strip():          errors.append("বিষয় দিন।")
-    if not grade.strip():            errors.append("শ্রেণি দিন।")
-    if not duration.strip():         errors.append("সময় দিন।")
     if not learning_outcome.strip(): errors.append("শিক্ষার ফলাফল দিন।")
     if not os.environ.get("OPENAI_API_KEY", ""):
         errors.append("OpenAI API Key দিন।")
-    if use_saved and not saved_alias_choice:
-        errors.append("একটি সংরক্ষিত Embedding বেছে নিন।")
     if context_mode == CONTEXT_MODE_PDF and not st.session_state.pdf_vectorstore_ready:
-        errors.append("পাঠ্যপুস্তকের PDF আপলোড করুন ও প্রসেস সম্পন্ন হওয়া পর্যন্ত অপেক্ষা করুন।")
+        errors.append("প্রথমে PDF আপলোড করে Embedding তৈরি করুন।")
+    if context_mode == CONTEXT_MODE_SAVED and not saved_alias_choice:
+        errors.append("একটি সংরক্ষিত Embedding বেছে নিন।")
     if context_mode == CONTEXT_MODE_MANUAL and not manual_context.strip():
         errors.append("Context টেক্সট লিখুন।")
 
@@ -519,66 +522,185 @@ if st.button("পাঠ পরিকল্পনা তৈরি করুন", 
 
     if not errors:
         try:
-            with st.status("পাঠ পরিকল্পনা তৈরি হচ্ছে...", expanded=True) as status_box:
-
-                if context_mode == CONTEXT_MODE_SAVED:
-                    st.write(f"'{saved_alias_choice}' থেকে Embedding লোড হচ্ছে...")
-                elif context_mode == CONTEXT_MODE_MANUAL:
-                    st.write("সরাসরি context ব্যবহার করা হচ্ছে...")
+            with st.spinner("Context বের করা হচ্ছে..."):
+                if context_mode == CONTEXT_MODE_MANUAL:
+                    # Manual context — no retrieval needed
+                    st.session_state.retrieved_chunks = [manual_context.strip()]
                 else:
-                    st.write("আগে থেকে প্রসেস করা Embedding ব্যবহার করা হচ্ছে...")
+                    # Retrieve from vector store
+                    if context_mode == CONTEXT_MODE_PDF:
+                        _alias = "__current_upload__"
+                    else:
+                        _alias = saved_alias_choice
 
-                st.write("AI পাঠ পরিকল্পনার সকল অংশ তৈরি করছে (১–২ মিনিট)...")
+                    from pipeline import get_embeddings, retrieve_context
+                    from embedding_manager import load_vectorstore
 
-                # Determine embedding source
-                if context_mode == CONTEXT_MODE_PDF:
-                    # Use the pre-built embedding from upload step
-                    _use_saved = True
-                    _saved_alias = "__current_upload__"
-                elif context_mode == CONTEXT_MODE_SAVED:
-                    _use_saved = True
-                    _saved_alias = saved_alias_choice
-                else:
-                    _use_saved = False
-                    _saved_alias = ""
+                    embeddings = get_embeddings()
+                    vectorstore = load_vectorstore(_alias, embeddings)
+                    context_text = retrieve_context(vectorstore, learning_outcome.strip())
 
-                from pipeline import run_pipeline
-                lesson_plan = run_pipeline(
-                    teacher_name=teacher_name.strip(),
-                    subject=subject.strip(),
-                    grade=grade.strip(),
-                    duration=duration.strip(),
-                    learning_outcome=learning_outcome.strip(),
-                    textbook_pdf_path="",
-                    model_name=model_name,
-                    use_saved_embedding=_use_saved,
-                    saved_embedding_alias=_saved_alias,
-                    save_new_embedding=False,
-                    new_embedding_alias="",
-                    manual_context=manual_context.strip(),
-                    user_assess_questions=user_assess_questions.strip(),
-                )
+                    if context_text:
+                        chunks = [c.strip() for c in context_text.split("\n\n---\n\n") if c.strip()]
+                        st.session_state.retrieved_chunks = chunks
+                    else:
+                        st.session_state.retrieved_chunks = []
 
-                st.write("DOCX তৈরি হচ্ছে...")
-                out_dir = tempfile.mkdtemp()
-                safe = "".join(c for c in teacher_name if c.isalnum() or c in " _-")[:20].replace(" ", "_")
-                fname = f"lesson_plan_{safe}.docx"
-                docx_path = os.path.join(out_dir, fname)
-
-                from docx_generator import generate_docx
-                generate_docx(lesson_plan, docx_path)
-
-                with open(docx_path, "rb") as f:
-                    st.session_state.docx_bytes = f.read()
-                st.session_state.docx_filename = fname
-                st.session_state.lesson_plan = lesson_plan
-
-                status_box.update(label="সম্পন্ন!", state="complete", expanded=False)
+                st.session_state.context_ready_for_gen = False
+                st.session_state.extra_contexts = []
+                st.rerun()
 
         except Exception as e:
-            logger.exception("Generation error")
-            st.error(f"ত্রুটি: {str(e)}")
-            st.info("API Key ও ইন্টারনেট সংযোগ চেক করুন। সমস্যা হলে 'সরাসরি context লিখুন' অপশন ব্যবহার করুন।")
+            logger.exception("Context retrieval error")
+            st.error(f"Context বের করতে সমস্যা: {str(e)}")
+
+# ── Show retrieved context for review ─────────────────────────────────────
+if st.session_state.retrieved_chunks is not None:
+    chunks = st.session_state.retrieved_chunks
+
+    if chunks:
+        st.markdown(f"""
+<div class="context-box">
+<b>পাঠ্যপুস্তক থেকে {len(chunks)} টি context পাওয়া গেছে।</b><br>
+পর্যালোচনা করুন — অপ্রাসঙ্গিক অংশ মুছতে পারবেন, নতুন context যোগ করতে পারবেন।
+সন্তুষ্ট হলে নিচের <b>"পাঠ পরিকল্পনা তৈরি করুন"</b> বোতামে ক্লিক করুন।
+</div>
+""", unsafe_allow_html=True)
+    else:
+        st.warning("কোনো প্রাসঙ্গিক context পাওয়া যায়নি। নিজে context যোগ করতে পারেন, অথবা AI নিজের জ্ঞান ব্যবহার করবে।")
+
+    # Editable context chunks
+    edited_chunks = []
+    for i, chunk in enumerate(chunks):
+        st.markdown(f"**অংশ {i+1}**")
+        edited = st.text_area(
+            f"context_chunk_{i}",
+            value=chunk,
+            height=120,
+            key=f"ctx_edit_{i}",
+            label_visibility="collapsed",
+        )
+        edited_chunks.append(edited)
+
+    # Show previously added extra contexts
+    extra_list = st.session_state.extra_contexts
+    for j, extra in enumerate(extra_list):
+        st.markdown(f"**অতিরিক্ত context {j+1}**")
+        edited_extra = st.text_area(
+            f"extra_ctx_{j}",
+            value=extra,
+            height=120,
+            key=f"extra_edit_{j}",
+            label_visibility="collapsed",
+        )
+        extra_list[j] = edited_extra
+
+    # Add new extra context
+    st.markdown("---")
+    st.markdown("**➕ নতুন context যোগ করুন**")
+    new_extra_ctx = st.text_area(
+        "নতুন context লিখুন",
+        placeholder="পাঠ্যপুস্তক থেকে কপি করে পেস্ট করুন, অথবা নিজের ভাষায় লিখুন...",
+        height=120,
+        key="new_extra_ctx_input",
+        label_visibility="collapsed",
+    )
+    if st.button("➕ যোগ করুন", key="add_extra_ctx_btn"):
+        if new_extra_ctx.strip():
+            st.session_state.extra_contexts.append(new_extra_ctx.strip())
+            st.rerun()
+        else:
+            st.warning("কিছু লিখুন।")
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 2: Generate Lesson Plan
+    # ══════════════════════════════════════════════════════════════════════════
+    st.subheader("ধাপ ২: পাঠ পরিকল্পনা তৈরি করুন")
+
+    # Validation
+    gen_errors = []
+    if not teacher_name.strip():     gen_errors.append("শিক্ষকের নাম দিন।")
+    if not subject.strip():          gen_errors.append("বিষয় দিন।")
+    if not grade.strip():            gen_errors.append("শ্রেণি দিন।")
+    if not duration.strip():         gen_errors.append("সময় দিন।")
+
+    if gen_errors:
+        for e in gen_errors:
+            st.warning(e)
+
+    if st.button("📝 পাঠ পরিকল্পনা তৈরি করুন", use_container_width=True, key="gen_lp_btn"):
+
+        # Re-check errors
+        final_errors = []
+        if not teacher_name.strip():     final_errors.append("শিক্ষকের নাম দিন।")
+        if not subject.strip():          final_errors.append("বিষয় দিন।")
+        if not grade.strip():            final_errors.append("শ্রেণি দিন।")
+        if not duration.strip():         final_errors.append("সময় দিন।")
+        if not learning_outcome.strip(): final_errors.append("শিক্ষার ফলাফল দিন।")
+        if not os.environ.get("OPENAI_API_KEY", ""):
+            final_errors.append("OpenAI API Key দিন।")
+
+        for e in final_errors:
+            st.error(e)
+
+        if not final_errors:
+            # Build final context from edited chunks + extras
+            all_context_parts = []
+            for i, chunk in enumerate(chunks):
+                # Read the edited value from the text_area widget
+                edited_val = st.session_state.get(f"ctx_edit_{i}", chunk).strip()
+                if edited_val:
+                    all_context_parts.append(edited_val)
+            for j, extra in enumerate(st.session_state.extra_contexts):
+                edited_val = st.session_state.get(f"extra_edit_{j}", extra).strip()
+                if edited_val:
+                    all_context_parts.append(edited_val)
+
+            final_context = "\n\n---\n\n".join(all_context_parts)
+
+            try:
+                with st.status("পাঠ পরিকল্পনা তৈরি হচ্ছে...", expanded=True) as status_box:
+                    st.write("AI পাঠ পরিকল্পনার সকল অংশ তৈরি করছে (১–২ মিনিট)...")
+
+                    from pipeline import run_pipeline
+                    lesson_plan = run_pipeline(
+                        teacher_name=teacher_name.strip(),
+                        subject=subject.strip(),
+                        grade=grade.strip(),
+                        duration=duration.strip(),
+                        learning_outcome=learning_outcome.strip(),
+                        textbook_pdf_path="",
+                        model_name=model_name,
+                        use_saved_embedding=False,
+                        saved_embedding_alias="",
+                        save_new_embedding=False,
+                        new_embedding_alias="",
+                        manual_context=final_context,
+                        user_assess_questions=user_assess_questions.strip(),
+                    )
+
+                    st.write("DOCX তৈরি হচ্ছে...")
+                    out_dir = tempfile.mkdtemp()
+                    safe = "".join(c for c in teacher_name if c.isalnum() or c in " _-")[:20].replace(" ", "_")
+                    fname = f"lesson_plan_{safe}.docx"
+                    docx_path = os.path.join(out_dir, fname)
+
+                    from docx_generator import generate_docx
+                    generate_docx(lesson_plan, docx_path)
+
+                    with open(docx_path, "rb") as f:
+                        st.session_state.docx_bytes = f.read()
+                    st.session_state.docx_filename = fname
+                    st.session_state.lesson_plan = lesson_plan
+
+                    status_box.update(label="সম্পন্ন!", state="complete", expanded=False)
+
+            except Exception as e:
+                logger.exception("Generation error")
+                st.error(f"ত্রুটি: {str(e)}")
+                st.info("API Key ও ইন্টারনেট সংযোগ চেক করুন।")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Download Section (persistent)
@@ -659,6 +781,10 @@ if st.session_state.docx_bytes is not None:
         st.session_state.docx_bytes = None
         st.session_state.docx_filename = None
         st.session_state.lesson_plan = None
+        st.session_state.retrieved_chunks = None
+        st.session_state.context_ready_for_gen = False
+        st.session_state.final_context = ""
+        st.session_state.extra_contexts = []
         st.rerun()
 
 # ── Footer ────────────────────────────────────────────────────────────────────
