@@ -552,9 +552,9 @@ if st.button("🔍 Context বের করুন", key="retrieve_ctx_btn", use_
 
     if not errors:
         try:
-            with st.spinner("Context বের করা হচ্ছে..."):
+            with st.status("Context বের করা হচ্ছে...", expanded=True) as ctx_status:
                 if context_mode == CONTEXT_MODE_MANUAL:
-                    # Manual — store as single chunk with score 0
+                    st.write("সরাসরি context ব্যবহার করা হচ্ছে...")
                     st.session_state.retrieved_chunks = [
                         {"text": manual_context.strip(), "score": 0.0, "active": True}
                     ]
@@ -569,8 +569,11 @@ if st.button("🔍 Context বের করুন", key="retrieve_ctx_btn", use_
 
                     embeddings = get_embeddings()
                     vectorstore = load_vectorstore(_alias, embeddings)
+                    total_vectors = vectorstore.index.ntotal
+                    st.write(f"Vector store লোড হয়েছে — {total_vectors} টি chunk আছে")
 
                     if use_entire_book:
+                        st.write(f"📚 সম্পূর্ণ বই context হিসেবে ব্যবহার হচ্ছে ({total_vectors} chunks)...")
                         full_text = get_all_chunks_as_context(vectorstore)
                         if full_text:
                             parts = [p.strip() for p in full_text.split("\n\n---\n\n") if p.strip()]
@@ -580,15 +583,41 @@ if st.button("🔍 Context বের করুন", key="retrieve_ctx_btn", use_
                         else:
                             st.session_state.retrieved_chunks = []
                     else:
+                        # Show the query rewriting
+                        import re as _re
+                        lo_text = learning_outcome.strip()
+                        topic_query = lo_text
+                        for phrase in [
+                            "করতে পারবে", "করে সমস্যা সমাধান করতে পারবে",
+                            "সমস্যা সমাধান করতে পারবে", "ব্যাখ্যা করতে পারবে",
+                            "প্রয়োগ করতে পারবে", "নির্ণয় করতে পারবে",
+                            "পারবে", "করে", "করতে",
+                        ]:
+                            topic_query = topic_query.replace(phrase, "").strip()
+                        topic_query = _re.sub(r'\s+', ' ', topic_query).strip()
+
+                        st.write(f"🔍 Query 1 (LO): {lo_text[:80]}...")
+                        if topic_query != lo_text:
+                            st.write(f"🔍 Query 2 (Topic): {topic_query}")
+                        st.write(f"📊 {retrieval_k} টি chunk আনা হচ্ছে...")
+
                         scored = retrieve_context_with_scores(
-                            vectorstore, learning_outcome.strip(), k=retrieval_k
+                            vectorstore, lo_text, k=retrieval_k
                         )
+
+                        st.write(f"✅ {len(scored)} টি chunk পাওয়া গেছে")
+                        if scored:
+                            best = scored[0][1]
+                            worst = scored[-1][1]
+                            st.write(f"   Score range: {best:.3f} (সবচেয়ে ভালো) → {worst:.3f} (সবচেয়ে দূর)")
+
                         st.session_state.retrieved_chunks = [
                             {"text": text, "score": score, "active": True}
                             for text, score in scored
                         ]
 
                 st.session_state.extra_contexts = []
+                ctx_status.update(label=f"✅ {len(st.session_state.retrieved_chunks)} টি context পাওয়া গেছে", state="complete", expanded=False)
                 st.rerun()
 
         except Exception as e:
