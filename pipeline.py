@@ -376,6 +376,11 @@ def retrieve_context_with_scores(
 ) -> list[tuple]:
     """Retrieve context chunks with their similarity scores.
 
+    Builds a better search query from the learning outcome by:
+    1. Using the raw LO as primary query
+    2. Also searching with key topic words extracted from LO
+    3. Merging and deduplicating results
+
     Returns list of (text, score) tuples sorted by score (lower = more similar).
     No filtering is done here — the UI handles that.
     """
@@ -388,20 +393,49 @@ def retrieve_context_with_scores(
             return []
         safe_k = min(k, total_docs)
 
-        results_with_scores = vectorstore.similarity_search_with_score(
+        # Primary search: full LO text
+        results1 = vectorstore.similarity_search_with_score(
             learning_outcome, k=safe_k
         )
 
-        if not results_with_scores:
-            return []
+        # Secondary search: build a focused topic query
+        # Strip common Bengali verb endings and helper words to get topic keywords
+        import re
+        # Remove common suffixes: করতে পারবে, নির্ণয় করে, সমাধান করতে, ব্যাখ্যা করতে, etc.
+        topic_query = learning_outcome
+        for phrase in [
+            "করতে পারবে", "করে সমস্যা সমাধান করতে পারবে", "সমস্যা সমাধান করতে পারবে",
+            "ব্যাখ্যা করতে পারবে", "প্রয়োগ করতে পারবে", "নির্ণয় করতে পারবে",
+            "গঠন করতে পারবে", "অঙ্কন করতে পারবে", "চিহ্নিত করতে পারবে",
+            "পারবে", "করে", "করতে",
+        ]:
+            topic_query = topic_query.replace(phrase, "").strip()
+        topic_query = re.sub(r'\s+', ' ', topic_query).strip()
 
-        out = []
-        for doc, score in results_with_scores:
-            preview = doc.page_content[:80].replace("\n", " ")
+        logger.info(f"Retrieval queries: LO='{learning_outcome[:60]}...' | Topic='{topic_query}'")
+
+        results2 = []
+        if topic_query and topic_query != learning_outcome:
+            results2 = vectorstore.similarity_search_with_score(
+                topic_query, k=safe_k
+            )
+
+        # Merge: keep best score for each unique chunk
+        seen_texts = {}
+        for doc, score in results1 + results2:
+            text = doc.page_content
+            text_key = text[:200]  # use first 200 chars as dedup key
+            if text_key not in seen_texts or score < seen_texts[text_key][1]:
+                seen_texts[text_key] = (text, round(float(score), 3))
+
+        # Sort by score (lower = better) and take top k
+        sorted_results = sorted(seen_texts.values(), key=lambda x: x[1])[:safe_k]
+
+        for text, score in sorted_results:
+            preview = text[:80].replace("\n", " ")
             logger.info(f"  Retrieval score={score:.3f} : {preview}...")
-            out.append((doc.page_content, round(float(score), 3)))
 
-        return out
+        return sorted_results
 
     except Exception as e:
         import logging
@@ -483,12 +517,18 @@ def _ctx(state: dict, lo_key: str = "learning_outcome") -> str:
 # Anti-repetition suffix — appended to every teacher action prompt
 VARIETY_RULE = """
 
-বাক্য শুরুতে বৈচিত্র্য (অত্যন্ত গুরুত্বপূর্ণ — এটি অবশ্যই মানতে হবে):
-পরপর দুটি বাক্য একই শব্দ বা বাক্যাংশ দিয়ে শুরু করা সম্পূর্ণ নিষিদ্ধ।
-"শিক্ষক বলেন" পরপর দুবার ব্যবহার করা যাবে না। এর পরিবর্তে ঘুরিয়ে ব্যবহার করো:
-  শিক্ষক বলেন → শিক্ষক জিজ্ঞেস করেন → এরপর শিক্ষক ব্যাখ্যা করেন → শিক্ষক নির্দেশ দেন → শিক্ষক উৎসাহ দিয়ে বলেন → এরপর শিক্ষক জানতে চান
-"শিক্ষক বোর্ডে লেখেন" এর বদলে: বোর্ডে ধাপগুলো লেখা হয় → শিক্ষক বোর্ডে উদাহরণ দেখান → শিক্ষক বোর্ডে সমাধান করে দেখান
-প্রতিটি নতুন বাক্য ভিন্নভাবে শুরু করো — একঘেয়ে পুনরাবৃত্তি এড়াও।"""
+অত্যন্ত গুরুত্বপূর্ণ নিয়ম — এটি ভঙ্গ করলে পুরো উত্তর বাতিল হবে:
+১) পরপর দুটি বাক্য "শিক্ষক বলেন" দিয়ে শুরু করা নিষিদ্ধ।
+২) পরপর দুটি বাক্য "শিক্ষক" শব্দ দিয়ে শুরু করা নিষিদ্ধ।
+৩) প্রতিটি বাক্য ভিন্নভাবে শুরু করো। নিচের তালিকা থেকে পালা করে ব্যবহার করো:
+   - শিক্ষক বলেন, "..."
+   - এরপর জিজ্ঞেস করেন, "..."
+   - বোর্ডে লেখা হয়: ...
+   - শিক্ষার্থীদের উদ্দেশ্যে নির্দেশ দেন, "..."
+   - ব্যাখ্যা করতে গিয়ে বলেন, "..."
+   - উৎসাহ দিয়ে বলেন, "..."
+   - এবার শিক্ষক জানতে চান, "..."
+৪) লেখা শেষে নিজে যাচাই করো — কোনো পরপর দুটি বাক্য একই শব্দে শুরু হয়েছে কি না।"""
 
 
 # ── Node: RAG context ──────────────────────────────────────────────────────────
