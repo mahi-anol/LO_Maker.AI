@@ -35,8 +35,23 @@ def _load_all() -> dict:
         guidelines = _get_builtin_guidelines()
         _save_all(guidelines)
         return guidelines
+
     with open(GUIDELINES_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+        existing = json.load(f)
+
+    # Merge: add any new built-in guidelines that don't exist yet
+    # This ensures new built-ins appear after code updates without
+    # losing user-added guidelines
+    builtins = _get_builtin_guidelines()
+    added = 0
+    for gid, g in builtins.items():
+        if gid not in existing:
+            existing[gid] = g
+            added += 1
+    if added > 0:
+        _save_all(existing)
+
+    return existing
 
 
 def _save_all(guidelines: dict):
@@ -346,5 +361,54 @@ def _get_builtin_guidelines() -> dict:
          "SWBAT examine parts of a plant\n"
          "SWBAT differentiate between geometric shapes - quadrilateral and triangle\n"
          "পাঠ পরিকল্পনার সব কার্যক্রম এই learning outcome achieve করার দিকে নির্দেশিত হবে।")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Master Prompt Guidelines
+    # ══════════════════════════════════════════════════════════════════════
+
+    # ── Classroom Scene Description Style ─────────────────────────────────
+    _add("mp_scene_style", "Classroom Scene Description Style",
+         "Master Prompt", "General Pedagogy",
+         "পাঠ পরিকল্পনা একটি ক্লাসরুমের দৃশ্য বর্ণনার মতো লিখতে হবে — শিক্ষক ধাপে ধাপে কী করেন ও কী বলেন তা দেখাতে হবে।\n"
+         "বেশিরভাগ অংশ অনুচ্ছেদ আকারে (paragraph) লিখতে হবে, বুলেট-ভারী নয়।\n"
+         "তবে কোনো নির্দেশনা বা 'What To Do' অংশ পরিষ্কার নম্বরযুক্ত পয়েন্টে লিখতে হবে।\n"
+         "শিক্ষক যখন কথা বলেন: শিক্ষক বলবেন, \"...\"\n"
+         "শিক্ষক যখন বোর্ডে লেখেন: শিক্ষক লিখবেন, \"...\"")
+
+    # ── 4-Point WTD Instructions ──────────────────────────────────────────
+    _add("mp_4point_wtd", "4-Point WTD Instructions",
+         "Master Prompt", "Classroom Management",
+         "কোনো কাজের নির্দেশনা দেওয়ার সময় ঠিক ৪টি সুনির্দিষ্ট, কার্যকর ধাপ দিতে হবে (What To Do - 4 Point Instructions)।\n"
+         "প্রতিটি ধাপ Specific, Observable, Concrete, Sequential হবে।\n"
+         "যেমন: ১) খাতা বের করো। ২) পৃষ্ঠা ১৫ খোলো। ৩) প্রশ্ন ৩ পড়ো। ৪) ২ মিনিটে উত্তর লেখো।")
+
+    # ── Real-Life Connection First ────────────────────────────────────────
+    _add("mp_reallife_launch", "Real-Life Connection First",
+         "Master Prompt", "Launch",
+         "Launch এ বিষয়টিকে বাস্তব জীবনের পরিস্থিতির সাথে সংযুক্ত করে শুরু করতে হবে।\n"
+         "একটি সহজ ভূমিকা দিয়ে শুরু করো যা দৈনন্দিন জীবনের সাথে সম্পর্কিত।\n"
+         "শিক্ষার্থীদের চিন্তার প্রশ্ন (thinking questions) দিয়ে engage করো।")
+
+    # ── Worked Examples with Explanation ──────────────────────────────────
+    _add("mp_worked_examples", "Worked Examples with Explanation",
+         "Master Prompt", "Conceptualize",
+         "Conceptualize পর্বে সম্পূর্ণ সমাধান সহ worked examples (সমাধানকৃত সমস্যা) থাকতে হবে।\n"
+         "সহজ থেকে কঠিনের দিকে ক্রমান্বয়ে এগিয়ে যাবে।\n"
+         "প্রতিটি ধাপের ব্যাখ্যা থাকবে — শুধু উত্তর নয়।\n"
+         "ভাষা সহজ ও স্পষ্ট হবে, ৭ম-৮ম শ্রেণির শিক্ষার্থীদের উপযোগী।")
+
+    # ── Practice Scaffolding ──────────────────────────────────────────────
+    _add("mp_practice_scaffold", "Practice Scaffolding (Easy to Hard)",
+         "Master Prompt", "Guided Practice",
+         "Guided Practice ও Independent Practice এ সমস্যাগুলো সহজ থেকে চ্যালেঞ্জিং ক্রমে সাজাতে হবে।\n"
+         "Guided Practice: 'Try it, Pair, Share' — প্রথমে একা চেষ্টা, তারপর জোড়ায় আলোচনা, তারপর শ্রেণিতে শেয়ার।\n"
+         "Independent Practice: একা কাজ — শিক্ষক পর্যবেক্ষণ করেন ও struggling শিক্ষার্থীদের সাহায্য করেন।")
+
+    # ── Assessment ESR & Exit Ticket Rule ─────────────────────────────────
+    _add("mp_esr_exit", "Assessment ESR & Exit Ticket Rule",
+         "Master Prompt", "Assessment",
+         "Assessment এর প্রথম প্রশ্নটি হুবহু একই শব্দে Exit Ticket এ পুনরায় ব্যবহার করতে হবে।\n"
+         "সঠিক উত্তরের লেবেল: ESR (Expected Student Response)।\n"
+         "Assessment প্রশ্নে সঠিক উত্তর lesson plan এ অন্তর্ভুক্ত থাকতে হবে।")
 
     return guidelines
