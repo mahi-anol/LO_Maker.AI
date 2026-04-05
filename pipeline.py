@@ -603,10 +603,7 @@ def node_assess_questions(state: LessonPlanState) -> LessonPlanState:
 def node_assess_exemplar(state: LessonPlanState) -> LessonPlanState:
     if state.get("error"): return state
     llm = get_llm(state["model_name"])
-    prompt = f"""শিক্ষার্থীর শিক্ষার ফলাফল: {state["learning_outcome"]}
-বিষয়: {state["subject"]} | শ্রেণি: {state["grade"]}
-
-নিচের প্রশ্নগুলোর বিস্তারিত আদর্শ উত্তর (Exemplar Student Response) লেখো।
+    prompt = f"""নিচের প্রশ্নগুলোর সঠিক উত্তর লেখো।
 
 প্রশ্নসমূহ:
 {state["assess_questions"]}
@@ -614,11 +611,8 @@ def node_assess_exemplar(state: LessonPlanState) -> LessonPlanState:
 নিয়ম:
 - শুধু উত্তর লেখো, প্রশ্ন পুনরায় লিখবে না।
 - প্রতিটি উত্তর নম্বর দিয়ে শুরু করো: ১) উত্তর: ...
-- প্রতিটি ধাপ আলাদা লাইনে লেখো এবং প্রতিটি ধাপে কী করা হচ্ছে ও কেন করা হচ্ছে তা সংক্ষেপে ব্যাখ্যা করো।
-- বহুনির্বাচনি প্রশ্নের ক্ষেত্রে সঠিক উত্তর চিহ্নিত করো এবং কেন সেটি সঠিক তা ১-২ বাক্যে ব্যাখ্যা করো।
-- গণনামূলক প্রশ্নের ক্ষেত্রে সম্পূর্ণ সমাধান প্রক্রিয়া ধাপে ধাপে দেখাও — কোনো ধাপ বাদ দিও না।
-- চূড়ান্ত উত্তরে ESR (Expected Student Response) লেবেল ব্যবহার করো।
-- একজন {state["grade"]} শ্রেণির শিক্ষার্থী যেভাবে লিখবে সেই স্তরে লেখো — তবে সম্পূর্ণ ও নির্ভুল।"""
+- বহুনির্বাচনি প্রশ্নে শুধু সঠিক অপশন লেখো।
+- গণনামূলক প্রশ্নে ধাপে ধাপে সমাধান দেখাও — সংক্ষেপে, কোনো অতিরিক্ত ব্যাখ্যা ছাড়া।"""
     return {**state, "assess_exemplar": clean(call_llm(llm, prompt))}
 
 
